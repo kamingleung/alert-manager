@@ -1,160 +1,142 @@
 /**
  * Route handlers — pure functions that work with any HTTP framework.
+ * Exposes backend-native API shapes + unified views.
  */
 import {
-  AlertService,
-  CreateAlertRuleInput,
-  Datasource,
   DatasourceService,
-  UpdateAlertRuleInput,
+  Datasource,
+  MultiBackendAlertService,
 } from '../../core';
+
+type Result = { status: number; body: any };
 
 // ============================================================================
 // Datasource Handlers
 // ============================================================================
 
-export async function handleListDatasources(service: DatasourceService) {
-  const datasources = await service.list();
-  return { status: 200, body: { datasources } };
+export async function handleListDatasources(svc: DatasourceService): Promise<Result> {
+  return { status: 200, body: { datasources: await svc.list() } };
 }
 
-export async function handleGetDatasource(service: DatasourceService, id: string) {
-  const datasource = await service.get(id);
-  if (!datasource) return { status: 404, body: { error: 'Datasource not found' } };
-  return { status: 200, body: datasource };
+export async function handleGetDatasource(svc: DatasourceService, id: string): Promise<Result> {
+  const ds = await svc.get(id);
+  if (!ds) return { status: 404, body: { error: 'Datasource not found' } };
+  return { status: 200, body: ds };
 }
 
-export async function handleCreateDatasource(
-  service: DatasourceService,
-  input: Omit<Datasource, 'id'>
-) {
+export async function handleCreateDatasource(svc: DatasourceService, input: Omit<Datasource, 'id'>): Promise<Result> {
   if (!input.name || !input.type || !input.url) {
     return { status: 400, body: { error: 'name, type, and url are required' } };
   }
   if (input.type !== 'opensearch' && input.type !== 'prometheus') {
     return { status: 400, body: { error: 'type must be opensearch or prometheus' } };
   }
-  const datasource = await service.create(input);
-  return { status: 201, body: datasource };
+  return { status: 201, body: await svc.create(input) };
 }
 
-export async function handleUpdateDatasource(
-  service: DatasourceService,
-  id: string,
-  input: Partial<Datasource>
-) {
-  const datasource = await service.update(id, input);
-  if (!datasource) return { status: 404, body: { error: 'Datasource not found' } };
-  return { status: 200, body: datasource };
+export async function handleUpdateDatasource(svc: DatasourceService, id: string, input: Partial<Datasource>): Promise<Result> {
+  const ds = await svc.update(id, input);
+  if (!ds) return { status: 404, body: { error: 'Datasource not found' } };
+  return { status: 200, body: ds };
 }
 
-export async function handleDeleteDatasource(service: DatasourceService, id: string) {
-  const deleted = await service.delete(id);
-  if (!deleted) return { status: 404, body: { error: 'Datasource not found' } };
+export async function handleDeleteDatasource(svc: DatasourceService, id: string): Promise<Result> {
+  const ok = await svc.delete(id);
+  if (!ok) return { status: 404, body: { error: 'Datasource not found' } };
   return { status: 200, body: { deleted: true } };
 }
 
-export async function handleTestDatasource(service: DatasourceService, id: string) {
-  const result = await service.testConnection(id);
-  return { status: result.success ? 200 : 400, body: result };
+export async function handleTestDatasource(svc: DatasourceService, id: string): Promise<Result> {
+  const r = await svc.testConnection(id);
+  return { status: r.success ? 200 : 400, body: r };
 }
 
 // ============================================================================
-// Alert Handlers
+// OpenSearch Monitor Handlers
 // ============================================================================
 
-export async function handleGetAllAlerts(service: AlertService) {
+export async function handleGetOSMonitors(alertSvc: MultiBackendAlertService, dsId: string): Promise<Result> {
   try {
-    const alerts = await service.getAllAlerts();
-    return { status: 200, body: { alerts } };
-  } catch (err) {
-    return { status: 500, body: { error: String(err) } };
-  }
+    return { status: 200, body: { monitors: await alertSvc.getOSMonitors(dsId) } };
+  } catch (e) { return { status: 400, body: { error: String(e) } }; }
 }
 
-export async function handleGetAlertsByDatasource(service: AlertService, datasourceId: string) {
+export async function handleGetOSMonitor(alertSvc: MultiBackendAlertService, dsId: string, monitorId: string): Promise<Result> {
   try {
-    const alerts = await service.getAlertsByDatasource(datasourceId);
-    return { status: 200, body: { alerts } };
-  } catch (err) {
-    return { status: 404, body: { error: String(err) } };
-  }
+    const m = await alertSvc.getOSMonitor(dsId, monitorId);
+    if (!m) return { status: 404, body: { error: 'Monitor not found' } };
+    return { status: 200, body: m };
+  } catch (e) { return { status: 400, body: { error: String(e) } }; }
+}
+
+export async function handleCreateOSMonitor(alertSvc: MultiBackendAlertService, dsId: string, body: any): Promise<Result> {
+  try {
+    return { status: 201, body: await alertSvc.createOSMonitor(dsId, body) };
+  } catch (e) { return { status: 400, body: { error: String(e) } }; }
+}
+
+export async function handleUpdateOSMonitor(alertSvc: MultiBackendAlertService, dsId: string, monitorId: string, body: any): Promise<Result> {
+  try {
+    const m = await alertSvc.updateOSMonitor(dsId, monitorId, body);
+    if (!m) return { status: 404, body: { error: 'Monitor not found' } };
+    return { status: 200, body: m };
+  } catch (e) { return { status: 400, body: { error: String(e) } }; }
+}
+
+export async function handleDeleteOSMonitor(alertSvc: MultiBackendAlertService, dsId: string, monitorId: string): Promise<Result> {
+  try {
+    const ok = await alertSvc.deleteOSMonitor(dsId, monitorId);
+    if (!ok) return { status: 404, body: { error: 'Monitor not found' } };
+    return { status: 200, body: { deleted: true } };
+  } catch (e) { return { status: 400, body: { error: String(e) } }; }
 }
 
 // ============================================================================
-// Alert Rule Handlers
+// OpenSearch Alert Handlers
 // ============================================================================
 
-export async function handleGetAllRules(service: AlertService) {
+export async function handleGetOSAlerts(alertSvc: MultiBackendAlertService, dsId: string): Promise<Result> {
   try {
-    const rules = await service.getAllRules();
-    return { status: 200, body: { rules } };
-  } catch (err) {
-    return { status: 500, body: { error: String(err) } };
-  }
+    return { status: 200, body: await alertSvc.getOSAlerts(dsId) };
+  } catch (e) { return { status: 400, body: { error: String(e) } }; }
 }
 
-export async function handleGetRulesByDatasource(service: AlertService, datasourceId: string) {
+export async function handleAcknowledgeOSAlerts(alertSvc: MultiBackendAlertService, dsId: string, monitorId: string, body: any): Promise<Result> {
   try {
-    const rules = await service.getRulesByDatasource(datasourceId);
-    return { status: 200, body: { rules } };
-  } catch (err) {
-    return { status: 404, body: { error: String(err) } };
-  }
+    return { status: 200, body: await alertSvc.acknowledgeOSAlerts(dsId, monitorId, body.alerts || []) };
+  } catch (e) { return { status: 400, body: { error: String(e) } }; }
 }
 
-export async function handleGetRule(
-  service: AlertService,
-  datasourceId: string,
-  ruleId: string
-) {
-  const rule = await service.getRule(datasourceId, ruleId);
-  if (!rule) return { status: 404, body: { error: 'Rule not found' } };
-  return { status: 200, body: rule };
-}
+// ============================================================================
+// Prometheus Handlers
+// ============================================================================
 
-export async function handleCreateRule(service: AlertService, input: CreateAlertRuleInput) {
-  if (!input.datasourceId || !input.name || !input.severity || !input.query || !input.condition) {
-    return {
-      status: 400,
-      body: { error: 'datasourceId, name, severity, query, and condition are required' },
-    };
-  }
+export async function handleGetPromRuleGroups(alertSvc: MultiBackendAlertService, dsId: string): Promise<Result> {
   try {
-    const rule = await service.createRule(input);
-    return { status: 201, body: rule };
-  } catch (err) {
-    return { status: 400, body: { error: String(err) } };
-  }
+    const groups = await alertSvc.getPromRuleGroups(dsId);
+    return { status: 200, body: { status: 'success', data: { groups } } };
+  } catch (e) { return { status: 400, body: { error: String(e) } }; }
 }
 
-export async function handleUpdateRule(
-  service: AlertService,
-  datasourceId: string,
-  ruleId: string,
-  input: UpdateAlertRuleInput
-) {
-  const rule = await service.updateRule(datasourceId, ruleId, input);
-  if (!rule) return { status: 404, body: { error: 'Rule not found' } };
-  return { status: 200, body: rule };
+export async function handleGetPromAlerts(alertSvc: MultiBackendAlertService, dsId: string): Promise<Result> {
+  try {
+    const alerts = await alertSvc.getPromAlerts(dsId);
+    return { status: 200, body: { status: 'success', data: { alerts } } };
+  } catch (e) { return { status: 400, body: { error: String(e) } }; }
 }
 
-export async function handleDeleteRule(
-  service: AlertService,
-  datasourceId: string,
-  ruleId: string
-) {
-  const deleted = await service.deleteRule(datasourceId, ruleId);
-  if (!deleted) return { status: 404, body: { error: 'Rule not found' } };
-  return { status: 200, body: { deleted: true } };
+// ============================================================================
+// Unified View Handlers (cross-backend)
+// ============================================================================
+
+export async function handleGetUnifiedAlerts(alertSvc: MultiBackendAlertService): Promise<Result> {
+  try {
+    return { status: 200, body: { alerts: await alertSvc.getUnifiedAlerts() } };
+  } catch (e) { return { status: 500, body: { error: String(e) } }; }
 }
 
-export async function handleToggleRule(
-  service: AlertService,
-  datasourceId: string,
-  ruleId: string
-) {
-  const rule = await service.toggleRule(datasourceId, ruleId);
-  if (!rule) return { status: 404, body: { error: 'Rule not found' } };
-  return { status: 200, body: rule };
+export async function handleGetUnifiedRules(alertSvc: MultiBackendAlertService): Promise<Result> {
+  try {
+    return { status: 200, body: { rules: await alertSvc.getUnifiedRules() } };
+  } catch (e) { return { status: 500, body: { error: String(e) } }; }
 }

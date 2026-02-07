@@ -1,12 +1,10 @@
 /**
- * Core Alarms UI — standalone version using @opensearch-project/oui directly.
+ * Alert Manager UI — uses unified views + backend-native drill-down.
  */
 import React, { useState, useEffect, useCallback } from 'react';
 import {
-  EuiButton,
   EuiBasicTable,
   EuiHealth,
-  EuiSwitch,
   EuiPage,
   EuiPageBody,
   EuiPageHeader,
@@ -14,16 +12,26 @@ import {
   EuiTitle,
   EuiSpacer,
   EuiEmptyPrompt,
-  EuiFlexGroup,
-  EuiFlexItem,
+  EuiBadge,
+  EuiTab,
+  EuiTabs,
 } from '@opensearch-project/oui';
-import { Alarm, AlarmService, CreateAlarmInput } from '../../core';
+import { Datasource, UnifiedAlert, UnifiedRule } from '../../core';
 
 const SEVERITY_COLORS: Record<string, string> = {
   critical: 'danger',
   high: 'warning',
   medium: 'primary',
   low: 'subdued',
+  info: 'default',
+};
+
+const STATE_COLORS: Record<string, string> = {
+  active: 'danger',
+  pending: 'warning',
+  acknowledged: 'primary',
+  resolved: 'success',
+  error: 'danger',
 };
 
 export interface HttpClient {
@@ -35,25 +43,19 @@ export interface HttpClient {
 export class AlarmsApiClient {
   constructor(private readonly http: HttpClient) {}
 
-  async list(): Promise<Alarm[]> {
-    const res = await this.http.get<{ alarms: Alarm[] }>('/api/alarms');
-    return res.alarms;
+  async listDatasources(): Promise<Datasource[]> {
+    const res = await this.http.get<{ datasources: Datasource[] }>('/api/datasources');
+    return res.datasources;
   }
 
-  async get(id: string): Promise<Alarm> {
-    return this.http.get<Alarm>(`/api/alarms/${id}`);
+  async listAlerts(): Promise<UnifiedAlert[]> {
+    const res = await this.http.get<{ alerts: UnifiedAlert[] }>('/api/alerts');
+    return res.alerts;
   }
 
-  async create(input: CreateAlarmInput): Promise<Alarm> {
-    return this.http.post<Alarm>('/api/alarms', input);
-  }
-
-  async delete(id: string): Promise<void> {
-    await this.http.delete(`/api/alarms/${id}`);
-  }
-
-  async toggle(id: string): Promise<Alarm> {
-    return this.http.post<Alarm>(`/api/alarms/${id}/toggle`);
+  async listRules(): Promise<UnifiedRule[]> {
+    const res = await this.http.get<{ rules: UnifiedRule[] }>('/api/rules');
+    return res.rules;
   }
 }
 
@@ -61,113 +63,135 @@ interface AlarmsPageProps {
   apiClient: AlarmsApiClient;
 }
 
+type TabId = 'alerts' | 'rules' | 'datasources';
+
 export const AlarmsPage: React.FC<AlarmsPageProps> = ({ apiClient }) => {
-  const [alarms, setAlarms] = useState<Alarm[]>([]);
+  const [activeTab, setActiveTab] = useState<TabId>('alerts');
+  const [alerts, setAlerts] = useState<UnifiedAlert[]>([]);
+  const [rules, setRules] = useState<UnifiedRule[]>([]);
+  const [datasources, setDatasources] = useState<Datasource[]>([]);
   const [loading, setLoading] = useState(true);
 
-  const fetchAlarms = useCallback(async () => {
+  const dsNameMap = new Map(datasources.map(d => [d.id, d.name]));
+
+  const fetchData = useCallback(async () => {
     setLoading(true);
     try {
-      const data = await apiClient.list();
-      setAlarms(data);
+      const [a, r, d] = await Promise.all([
+        apiClient.listAlerts(),
+        apiClient.listRules(),
+        apiClient.listDatasources(),
+      ]);
+      setAlerts(a);
+      setRules(r);
+      setDatasources(d);
     } catch (e) {
-      console.error('Failed to fetch alarms', e);
+      console.error('Failed to fetch data', e);
     } finally {
       setLoading(false);
     }
   }, [apiClient]);
 
-  useEffect(() => {
-    fetchAlarms();
-  }, [fetchAlarms]);
+  useEffect(() => { fetchData(); }, [fetchData]);
 
-  const handleToggle = async (id: string) => {
-    await apiClient.toggle(id);
-    fetchAlarms();
-  };
-
-  const handleDelete = async (id: string) => {
-    await apiClient.delete(id);
-    fetchAlarms();
-  };
-
-  const columns = [
+  // --- Alert columns ---
+  const alertColumns = [
     { field: 'name', name: 'Name', sortable: true },
     {
-      field: 'severity',
-      name: 'Severity',
-      render: (severity: string) => (
-        <EuiHealth color={SEVERITY_COLORS[severity] || 'subdued'}>
-          {severity}
-        </EuiHealth>
-      ),
-    },
-    { field: 'condition', name: 'Condition' },
-    {
-      field: 'enabled',
-      name: 'Enabled',
-      render: (enabled: boolean, alarm: Alarm) => (
-        <EuiSwitch
-          label=""
-          checked={enabled}
-          onChange={() => handleToggle(alarm.id)}
-          compressed
-          showLabel={false}
-        />
-      ),
+      field: 'state', name: 'State',
+      render: (state: string) => <EuiHealth color={STATE_COLORS[state] || 'subdued'}>{state}</EuiHealth>,
     },
     {
-      name: 'Actions',
-      render: (alarm: Alarm) => (
-        <EuiButton size="s" color="danger" onClick={() => handleDelete(alarm.id)}>
-          Delete
-        </EuiButton>
-      ),
+      field: 'severity', name: 'Severity',
+      render: (s: string) => <EuiBadge color={SEVERITY_COLORS[s] || 'default'}>{s}</EuiBadge>,
+    },
+    {
+      field: 'datasourceType', name: 'Backend',
+      render: (t: string) => <EuiBadge color={t === 'opensearch' ? 'primary' : 'accent'}>{t}</EuiBadge>,
+    },
+    {
+      field: 'datasourceId', name: 'Datasource',
+      render: (id: string) => dsNameMap.get(id) || id,
+    },
+    { field: 'message', name: 'Message', truncateText: true },
+    {
+      field: 'startTime', name: 'Started',
+      render: (ts: string) => ts ? new Date(ts).toLocaleString() : '-',
     },
   ];
 
-  if (!loading && alarms.length === 0) {
-    return (
-      <EuiPage restrictWidth="1000px">
-        <EuiPageBody component="main">
-          <EuiEmptyPrompt
-            title={<h2>Welcome to Alarms</h2>}
-            body={
-              <p>
-                Create and manage alert rules to monitor your system health and get
-                notified when issues occur.
-              </p>
-            }
-            actions={
-              <EuiButton color="primary" fill>
-                Create alert rule
-              </EuiButton>
-            }
-          />
-        </EuiPageBody>
-      </EuiPage>
-    );
-  }
+  // --- Rule columns ---
+  const ruleColumns = [
+    { field: 'name', name: 'Name', sortable: true },
+    {
+      field: 'enabled', name: 'Status',
+      render: (e: boolean) => <EuiBadge color={e ? 'success' : 'default'}>{e ? 'Enabled' : 'Disabled'}</EuiBadge>,
+    },
+    {
+      field: 'severity', name: 'Severity',
+      render: (s: string) => <EuiBadge color={SEVERITY_COLORS[s] || 'default'}>{s}</EuiBadge>,
+    },
+    {
+      field: 'datasourceType', name: 'Backend',
+      render: (t: string) => <EuiBadge color={t === 'opensearch' ? 'primary' : 'accent'}>{t}</EuiBadge>,
+    },
+    {
+      field: 'datasourceId', name: 'Datasource',
+      render: (id: string) => dsNameMap.get(id) || id,
+    },
+    { field: 'query', name: 'Query', truncateText: true },
+    { field: 'group', name: 'Group', render: (g: string) => g || '-' },
+  ];
+
+  // --- Datasource columns ---
+  const datasourceColumns = [
+    { field: 'name', name: 'Name', sortable: true },
+    {
+      field: 'type', name: 'Type',
+      render: (t: string) => <EuiBadge color={t === 'opensearch' ? 'primary' : 'accent'}>{t}</EuiBadge>,
+    },
+    { field: 'url', name: 'URL', truncateText: true },
+    {
+      field: 'enabled', name: 'Status',
+      render: (e: boolean) => <EuiBadge color={e ? 'success' : 'default'}>{e ? 'Enabled' : 'Disabled'}</EuiBadge>,
+    },
+  ];
+
+  const tabs = [
+    { id: 'alerts' as TabId, name: `Alerts (${alerts.length})` },
+    { id: 'rules' as TabId, name: `Rules (${rules.length})` },
+    { id: 'datasources' as TabId, name: `Datasources (${datasources.length})` },
+  ];
+
+  const renderTable = () => {
+    if (activeTab === 'alerts') {
+      if (!loading && alerts.length === 0) return <EuiEmptyPrompt title={<h2>No Active Alerts</h2>} body={<p>All systems operating normally.</p>} />;
+      return <EuiBasicTable items={alerts} columns={alertColumns} loading={loading} />;
+    }
+    if (activeTab === 'rules') {
+      if (!loading && rules.length === 0) return <EuiEmptyPrompt title={<h2>No Rules</h2>} body={<p>No alerting rules configured.</p>} />;
+      return <EuiBasicTable items={rules} columns={ruleColumns} loading={loading} />;
+    }
+    if (!loading && datasources.length === 0) return <EuiEmptyPrompt title={<h2>No Datasources</h2>} body={<p>Add a datasource to get started.</p>} />;
+    return <EuiBasicTable items={datasources} columns={datasourceColumns} loading={loading} />;
+  };
 
   return (
     <EuiPage restrictWidth="1200px">
       <EuiPageBody component="main">
         <EuiPageHeader>
           <EuiPageHeaderSection>
-            <EuiTitle size="l">
-              <h1>Alarms</h1>
-            </EuiTitle>
-          </EuiPageHeaderSection>
-          <EuiPageHeaderSection>
-            <EuiFlexGroup gutterSize="s">
-              <EuiFlexItem>
-                <EuiButton fill>Create alert rule</EuiButton>
-              </EuiFlexItem>
-            </EuiFlexGroup>
+            <EuiTitle size="l"><h1>Alert Manager</h1></EuiTitle>
           </EuiPageHeaderSection>
         </EuiPageHeader>
+        <EuiSpacer size="m" />
+        <EuiTabs>
+          {tabs.map(t => (
+            <EuiTab key={t.id} isSelected={activeTab === t.id} onClick={() => setActiveTab(t.id)}>{t.name}</EuiTab>
+          ))}
+        </EuiTabs>
         <EuiSpacer />
-        <EuiBasicTable items={alarms} columns={columns} loading={loading} />
+        {renderTable()}
       </EuiPageBody>
     </EuiPage>
   );
