@@ -1,6 +1,6 @@
 # @anirudhaj/alarms
 
-Standalone Alarms service for OpenSearch Dashboards. Run alert management without the full OSD stack.
+Alert Manager UI for OpenSearch Alerting and Amazon Managed Prometheus. Supports multiple alerting backends with a unified interface.
 
 ## Quick Start
 
@@ -13,41 +13,81 @@ Open http://localhost:5603 in your browser.
 ## Options
 
 ```bash
-npx @anirudhaj/alarms --port 8080   # Custom port
-npx @anirudhaj/alarms --help        # Show help
+npx @anirudhaj/alarms --port 8080      # Custom port
+MOCK_MODE=false npx @anirudhaj/alarms  # Disable mock mode
+npx @anirudhaj/alarms --help           # Show help
 ```
+
+## Supported Backends
+
+- **OpenSearch Alerting** — Full alerting API support
+- **Amazon Managed Prometheus** — Prometheus-compatible alerting API
 
 ## API
 
+### Datasources
+
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| GET | `/api/alarms` | List all alarms |
-| GET | `/api/alarms/:id` | Get alarm by ID |
-| POST | `/api/alarms` | Create alarm |
-| DELETE | `/api/alarms/:id` | Delete alarm |
-| POST | `/api/alarms/:id/toggle` | Toggle enabled state |
+| GET | `/api/datasources` | List all datasources |
+| GET | `/api/datasources/:id` | Get datasource by ID |
+| POST | `/api/datasources` | Create datasource |
+| PUT | `/api/datasources/:id` | Update datasource |
+| DELETE | `/api/datasources/:id` | Delete datasource |
+| POST | `/api/datasources/:id/test` | Test connection |
 
-### Create Alarm
+### Alerts
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/api/alerts` | List all alerts (all datasources) |
+| GET | `/api/datasources/:id/alerts` | List alerts for datasource |
+
+### Alert Rules
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/api/rules` | List all rules (all datasources) |
+| GET | `/api/datasources/:id/rules` | List rules for datasource |
+| GET | `/api/datasources/:id/rules/:ruleId` | Get rule by ID |
+| POST | `/api/rules` | Create rule |
+| PUT | `/api/datasources/:id/rules/:ruleId` | Update rule |
+| DELETE | `/api/datasources/:id/rules/:ruleId` | Delete rule |
+| POST | `/api/datasources/:id/rules/:ruleId/toggle` | Toggle rule enabled |
+
+### Examples
 
 ```bash
-curl -X POST http://localhost:5603/api/alarms \
+# List datasources
+curl http://localhost:5603/api/datasources
+
+# Create a datasource
+curl -X POST http://localhost:5603/api/datasources \
   -H "Content-Type: application/json" \
-  -d '{"name":"CPU High","severity":"critical","condition":"cpu > 90%"}'
-```
+  -d '{"name":"My OpenSearch","type":"opensearch","url":"https://localhost:9200","enabled":true}'
 
-### List Alarms
+# List all alerts
+curl http://localhost:5603/api/alerts
 
-```bash
-curl http://localhost:5603/api/alarms
+# Create an alert rule
+curl -X POST http://localhost:5603/api/rules \
+  -H "Content-Type: application/json" \
+  -d '{
+    "datasourceId": "ds-1",
+    "name": "High CPU",
+    "severity": "critical",
+    "query": "cpu > 90",
+    "condition": "avg() > 90"
+  }'
 ```
 
 ## Features
 
-- 🚀 **Instant startup** — No OSD bootstrap required
-- 📦 **Tiny footprint** — ~4MB vs ~1GB for full OSD
-- 🎨 **Full UI** — Same OUI-based interface as OSD plugin
-- 🔌 **REST API** — Standard JSON API for integrations
-- 🔄 **Dual mode** — Same codebase runs as OSD plugin or standalone
+- 🔌 **Multi-backend** — OpenSearch Alerting + Amazon Managed Prometheus
+- 🎭 **Mock mode** — Built-in mock data for development
+- 🚀 **Instant startup** — No dependencies required
+- 📦 **Tiny footprint** — ~4MB standalone package
+- 🎨 **Full UI** — OUI-based interface
 
 ## Repository
 
