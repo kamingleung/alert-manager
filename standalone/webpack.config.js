@@ -20,6 +20,8 @@ module.exports = {
       'react': path.resolve(__dirname, 'node_modules/react'),
       'react-dom': path.resolve(__dirname, 'node_modules/react-dom'),
       'react-router-dom': path.resolve(__dirname, 'node_modules/react-router-dom'),
+      // Map @opensearch/datemath to @elastic/datemath (OUI peer dependency)
+      '@opensearch/datemath': path.resolve(__dirname, 'node_modules/@elastic/datemath'),
     }
   },
   module: {
