@@ -36,13 +36,13 @@ Alert Manager is a plugin for OpenSearch Dashboards that provides alert rule man
 
 ```bash
 # Run with default port 5603
-npx @opensearch-dashboards/alarms
+npx @anirudhaj/alarms
 
 # Custom port
-npx @opensearch-dashboards/alarms --port 8080
+npx @anirudhaj/alarms --port 8080
 
 # Show help
-npx @opensearch-dashboards/alarms --help
+npx @anirudhaj/alarms --help
 ```
 
 Open http://localhost:5603 in your browser.
@@ -70,6 +70,8 @@ Navigate to http://localhost:5601/app/alarms
 | ------------------------ | --------------------------------------------------------------- |
 | Test and build           | [![Build][build-badge]][build-link]                             |
 | Distribution build tests | [![Standalone][standalone-badge]][standalone-link]              |
+| npm publish              | [![Publish][publish-badge]][publish-link]                       |
+| npm version              | [![npm][npm-badge]][npm-link]                                   |
 
 ### Repository Checks
 
@@ -90,6 +92,10 @@ Navigate to http://localhost:5601/app/alarms
 [build-link]: https://github.com/anirudha/alert-manager/actions
 [standalone-badge]: https://img.shields.io/badge/standalone-ready-blue
 [standalone-link]: https://github.com/anirudha/alert-manager/tree/main/standalone
+[publish-badge]: https://github.com/anirudha/alert-manager/actions/workflows/publish.yml/badge.svg
+[publish-link]: https://github.com/anirudha/alert-manager/actions/workflows/publish.yml
+[npm-badge]: https://img.shields.io/npm/v/@anirudhaj/alarms
+[npm-link]: https://www.npmjs.com/package/@anirudhaj/alarms
 [dco-badge]: https://img.shields.io/badge/DCO-enabled-brightgreen
 [dco-badge-link]: https://github.com/anirudha/alert-manager/actions
 [link-check-badge]: https://img.shields.io/badge/links-valid-brightgreen
@@ -173,6 +179,18 @@ npm run dev
 cd /path/to/OpenSearch-Dashboards
 yarn start
 ```
+
+### Publishing
+
+The standalone package is published to npm automatically via GitHub Actions when a version tag is pushed:
+
+```bash
+# Update version in standalone/package.json, then:
+git tag v1.0.1
+git push --tags
+```
+
+This triggers the [publish workflow](.github/workflows/publish.yml) which builds and publishes to npm.
 
 ## Getting Help
 
