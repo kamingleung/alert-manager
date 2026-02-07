@@ -1,0 +1,14 @@
+{
+  "name": "alarms",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Alarms plugin with dual distribution: OSD plugin or standalone",
+  "scripts": {
+    "build": "yarn plugin-helpers build",
+    "build:standalone": "cd standalone && npm install && npm run build",
+    "start:standalone": "cd standalone && npm run start",
+    "dev:standalone": "cd standalone && npm run dev",
+    "plugin-helpers": "../../scripts/use_node ../../scripts/plugin_helpers",
+    "osd": "../../scripts/use_node ../../scripts/osd"
+  }
+}

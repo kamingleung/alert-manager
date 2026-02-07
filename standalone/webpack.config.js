@@ -1,0 +1,56 @@
+const path = require('path');
+const HtmlWebpackPlugin = require('html-webpack-plugin');
+
+module.exports = {
+  entry: './client.tsx',
+  output: {
+    path: path.resolve(__dirname, 'dist/public'),
+    filename: 'bundle.js',
+    publicPath: '/',
+  },
+  resolve: {
+    extensions: ['.ts', '.tsx', '.js', '.jsx'],
+    // Force resolution from standalone node_modules first
+    modules: [
+      path.resolve(__dirname, 'node_modules'),
+      'node_modules'
+    ],
+    alias: {
+      // Force react and react-dom to use standalone versions
+      'react': path.resolve(__dirname, 'node_modules/react'),
+      'react-dom': path.resolve(__dirname, 'node_modules/react-dom'),
+      'react-router-dom': path.resolve(__dirname, 'node_modules/react-router-dom'),
+    }
+  },
+  module: {
+    rules: [
+      {
+        test: /\.tsx?$/,
+        use: {
+          loader: 'ts-loader',
+          options: {
+            configFile: path.resolve(__dirname, 'tsconfig.json'),
+            transpileOnly: true, // Skip type checking during build
+          },
+        },
+        exclude: /node_modules/,
+      },
+      {
+        test: /\.css$/,
+        use: ['style-loader', 'css-loader'],
+      },
+    ],
+  },
+  plugins: [
+    new HtmlWebpackPlugin({
+      template: './index.html',
+    }),
+  ],
+  devServer: {
+    port: 3000,
+    proxy: {
+      '/api': 'http://localhost:5603',
+    },
+    historyApiFallback: true,
+  },
+};
