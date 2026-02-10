@@ -22,6 +22,8 @@ import {
   EuiFilterButton,
   EuiPopover,
   EuiSelectable,
+  EuiSwitch,
+  EuiButtonIcon,
 } from '@opensearch-project/oui';
 import { Datasource, UnifiedAlert, UnifiedRule } from '../../core';
 
@@ -87,6 +89,8 @@ export const AlarmsPage: React.FC<AlarmsPageProps> = ({ apiClient }) => {
   const [isStatusPopoverOpen, setIsStatusPopoverOpen] = useState(false);
   const [isSeverityPopoverOpen, setIsSeverityPopoverOpen] = useState(false);
   const [isBackendPopoverOpen, setIsBackendPopoverOpen] = useState(false);
+  const [groupByEnabled, setGroupByEnabled] = useState(false);
+  const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set());
 
   const dsNameMap = new Map(datasources.map(d => [d.id, d.name]));
 
@@ -182,6 +186,42 @@ export const AlarmsPage: React.FC<AlarmsPageProps> = ({ apiClient }) => {
 
   const activeFilterCount = statusFilter.length + severityFilter.length + backendFilter.length;
 
+  // Group rules by group name
+  const groupedRules = useMemo(() => {
+    const groups = new Map<string, UnifiedRule[]>();
+    
+    filteredRules.forEach(rule => {
+      const groupName = rule.group || 'Ungrouped';
+      if (!groups.has(groupName)) {
+        groups.set(groupName, []);
+      }
+      groups.get(groupName)!.push(rule);
+    });
+
+    return Array.from(groups.entries()).map(([groupName, rules]) => {
+      const enabledCount = rules.filter(r => r.enabled).length;
+      const disabledCount = rules.length - enabledCount;
+      
+      return {
+        groupName,
+        rules,
+        ruleCount: rules.length,
+        enabledCount,
+        disabledCount,
+      };
+    });
+  }, [filteredRules]);
+
+  const toggleGroup = (groupName: string) => {
+    const newExpanded = new Set(expandedGroups);
+    if (newExpanded.has(groupName)) {
+      newExpanded.delete(groupName);
+    } else {
+      newExpanded.add(groupName);
+    }
+    setExpandedGroups(newExpanded);
+  };
+
 
   // --- Alert columns ---
   const alertColumns = [
@@ -211,7 +251,7 @@ export const AlarmsPage: React.FC<AlarmsPageProps> = ({ apiClient }) => {
 
   // --- Rule columns ---
   const ruleColumns = [
-    { field: 'name', name: 'Name', sortable: true },
+    { field: 'name', name: 'Name', sortable: true, width: '30%' },
     {
       field: 'enabled', name: 'Status',
       render: (e: boolean) => <EuiBadge color={e ? 'success' : 'default'}>{e ? 'Enabled' : 'Disabled'}</EuiBadge>,
@@ -231,6 +271,87 @@ export const AlarmsPage: React.FC<AlarmsPageProps> = ({ apiClient }) => {
     { field: 'query', name: 'Query', truncateText: true },
     { field: 'group', name: 'Group', render: (g: string) => g || '-' },
   ];
+
+  // --- Nested rule columns (without group column) ---
+  const nestedRuleColumns = [
+    { field: 'name', name: 'Name', sortable: true, width: '30%' },
+    {
+      field: 'enabled', name: 'Status',
+      render: (e: boolean) => <EuiBadge color={e ? 'success' : 'default'}>{e ? 'Enabled' : 'Disabled'}</EuiBadge>,
+    },
+    {
+      field: 'severity', name: 'Severity',
+      render: (s: string) => <EuiBadge color={SEVERITY_COLORS[s] || 'default'}>{s}</EuiBadge>,
+    },
+    {
+      field: 'datasourceType', name: 'Backend',
+      render: (t: string) => <EuiBadge color={t === 'opensearch' ? 'primary' : 'accent'}>{t}</EuiBadge>,
+    },
+    {
+      field: 'datasourceId', name: 'Datasource',
+      render: (id: string) => dsNameMap.get(id) || id,
+    },
+    { field: 'query', name: 'Query', truncateText: true },
+  ];
+
+  // --- Group columns (for grouped view) ---
+  const groupColumns = [
+    {
+      field: 'groupName',
+      name: 'Group',
+      render: (groupName: string) => (
+        <EuiFlexGroup gutterSize="s" alignItems="center" responsive={false}>
+          <EuiFlexItem grow={false}>
+            <EuiButtonIcon
+              onClick={() => toggleGroup(groupName)}
+              iconType={expandedGroups.has(groupName) ? 'arrowDown' : 'arrowRight'}
+              aria-label={expandedGroups.has(groupName) ? 'Collapse group' : 'Expand group'}
+              color="text"
+            />
+          </EuiFlexItem>
+          <EuiFlexItem grow={false}>
+            <strong>{groupName}</strong>
+          </EuiFlexItem>
+        </EuiFlexGroup>
+      ),
+    },
+    {
+      field: 'ruleCount',
+      name: 'Rules',
+      render: (count: number, item: any) => (
+        <EuiFlexGroup gutterSize="s" alignItems="center" responsive={false}>
+          {item.enabledCount > 0 && (
+            <EuiFlexItem grow={false}>
+              <EuiBadge color="success">{item.enabledCount} enabled</EuiBadge>
+            </EuiFlexItem>
+          )}
+          {item.disabledCount > 0 && (
+            <EuiFlexItem grow={false}>
+              <EuiBadge color="default">{item.disabledCount} disabled</EuiBadge>
+            </EuiFlexItem>
+          )}
+        </EuiFlexGroup>
+      ),
+    },
+  ];
+
+  const itemIdToExpandedRowMap: Record<string, React.ReactNode> = {};
+  
+  if (groupByEnabled) {
+    groupedRules.forEach(({ groupName, rules: groupRules }) => {
+      if (expandedGroups.has(groupName)) {
+        itemIdToExpandedRowMap[groupName] = (
+          <div style={{ padding: '16px' }}>
+            <EuiBasicTable
+              items={groupRules}
+              columns={nestedRuleColumns}
+              tableLayout="fixed"
+            />
+          </div>
+        );
+      }
+    });
+  }
 
   // --- Datasource columns ---
   const datasourceColumns = [
@@ -262,6 +383,22 @@ export const AlarmsPage: React.FC<AlarmsPageProps> = ({ apiClient }) => {
       if (!loading && filteredRules.length === 0 && (searchQuery || activeFilterCount > 0)) {
         return <EuiEmptyPrompt title={<h2>No Matching Rules</h2>} body={<p>Try adjusting your search or filters.</p>} />;
       }
+
+      // Grouped view
+      if (groupByEnabled) {
+        return (
+          <EuiBasicTable
+            items={groupedRules}
+            columns={groupColumns}
+            loading={loading}
+            itemId="groupName"
+            itemIdToExpandedRowMap={itemIdToExpandedRowMap}
+            isExpandable={true}
+          />
+        );
+      }
+
+      // Standard flat view
       return <EuiBasicTable items={filteredRules} columns={ruleColumns} loading={loading} />;
     }
     if (!loading && datasources.length === 0) return <EuiEmptyPrompt title={<h2>No Datasources</h2>} body={<p>Add a datasource to get started.</p>} />;
@@ -364,6 +501,14 @@ export const AlarmsPage: React.FC<AlarmsPageProps> = ({ apiClient }) => {
                 </EuiSelectable>
               </EuiPopover>
             </EuiFilterGroup>
+          </EuiFlexItem>
+          <EuiFlexItem grow={false}>
+            <EuiSwitch
+              label="Group by groups"
+              checked={groupByEnabled}
+              onChange={(e) => setGroupByEnabled(e.target.checked)}
+              compressed
+            />
           </EuiFlexItem>
         </EuiFlexGroup>
         <EuiSpacer size="m" />
