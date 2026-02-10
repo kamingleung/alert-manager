@@ -22,8 +22,8 @@ import {
   EuiFilterButton,
   EuiPopover,
   EuiSelectable,
-  EuiSwitch,
   EuiButtonIcon,
+  EuiButtonGroup,
 } from '@opensearch-project/oui';
 import { Datasource, UnifiedAlert, UnifiedRule } from '../../core';
 
@@ -89,8 +89,10 @@ export const AlarmsPage: React.FC<AlarmsPageProps> = ({ apiClient }) => {
   const [isStatusPopoverOpen, setIsStatusPopoverOpen] = useState(false);
   const [isSeverityPopoverOpen, setIsSeverityPopoverOpen] = useState(false);
   const [isBackendPopoverOpen, setIsBackendPopoverOpen] = useState(false);
-  const [groupByEnabled, setGroupByEnabled] = useState(false);
+  const [viewMode, setViewMode] = useState<'list' | 'grouped'>('list');
   const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set());
+
+  const groupByEnabled = viewMode === 'grouped';
 
   const dsNameMap = new Map(datasources.map(d => [d.id, d.name]));
 
@@ -408,9 +410,29 @@ export const AlarmsPage: React.FC<AlarmsPageProps> = ({ apiClient }) => {
   const renderSearchAndFilters = () => {
     if (activeTab !== 'rules') return null;
 
+    const viewModeButtons = [
+      {
+        id: 'list',
+        label: 'List all rules',
+      },
+      {
+        id: 'grouped',
+        label: 'By rule groups',
+      },
+    ];
+
     return (
       <>
         <EuiFlexGroup gutterSize="m" alignItems="center">
+          <EuiFlexItem grow={false}>
+            <EuiButtonGroup
+              legend="View mode"
+              options={viewModeButtons}
+              idSelected={viewMode}
+              onChange={(id) => setViewMode(id as 'list' | 'grouped')}
+              buttonSize="compressed"
+            />
+          </EuiFlexItem>
           <EuiFlexItem grow={true}>
             <EuiFieldSearch
               placeholder="Search rules by name, query, or group..."
@@ -501,14 +523,6 @@ export const AlarmsPage: React.FC<AlarmsPageProps> = ({ apiClient }) => {
                 </EuiSelectable>
               </EuiPopover>
             </EuiFilterGroup>
-          </EuiFlexItem>
-          <EuiFlexItem grow={false}>
-            <EuiSwitch
-              label="Group by groups"
-              checked={groupByEnabled}
-              onChange={(e) => setGroupByEnabled(e.target.checked)}
-              compressed
-            />
           </EuiFlexItem>
         </EuiFlexGroup>
         <EuiSpacer size="m" />
