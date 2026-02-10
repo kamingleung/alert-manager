@@ -1,7 +1,7 @@
 /**
  * Alert Manager UI — uses unified views + backend-native drill-down.
  */
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import {
   EuiBasicTable,
   EuiHealth,
@@ -15,6 +15,13 @@ import {
   EuiBadge,
   EuiTab,
   EuiTabs,
+  EuiFieldSearch,
+  EuiFlexGroup,
+  EuiFlexItem,
+  EuiFilterGroup,
+  EuiFilterButton,
+  EuiPopover,
+  EuiSelectable,
 } from '@opensearch-project/oui';
 import { Datasource, UnifiedAlert, UnifiedRule } from '../../core';
 
@@ -72,6 +79,15 @@ export const AlarmsPage: React.FC<AlarmsPageProps> = ({ apiClient }) => {
   const [datasources, setDatasources] = useState<Datasource[]>([]);
   const [loading, setLoading] = useState(true);
 
+  // Search and filter state
+  const [searchQuery, setSearchQuery] = useState('');
+  const [statusFilter, setStatusFilter] = useState<string[]>([]);
+  const [severityFilter, setSeverityFilter] = useState<string[]>([]);
+  const [backendFilter, setBackendFilter] = useState<string[]>([]);
+  const [isStatusPopoverOpen, setIsStatusPopoverOpen] = useState(false);
+  const [isSeverityPopoverOpen, setIsSeverityPopoverOpen] = useState(false);
+  const [isBackendPopoverOpen, setIsBackendPopoverOpen] = useState(false);
+
   const dsNameMap = new Map(datasources.map(d => [d.id, d.name]));
 
   const fetchData = useCallback(async () => {
@@ -93,6 +109,79 @@ export const AlarmsPage: React.FC<AlarmsPageProps> = ({ apiClient }) => {
   }, [apiClient]);
 
   useEffect(() => { fetchData(); }, [fetchData]);
+
+  // Filter rules based on search and filters
+  const filteredRules = useMemo(() => {
+    return rules.filter(rule => {
+      // Search filter
+      if (searchQuery) {
+        const query = searchQuery.toLowerCase();
+        const matchesSearch = 
+          rule.name.toLowerCase().includes(query) ||
+          rule.query?.toLowerCase().includes(query) ||
+          rule.group?.toLowerCase().includes(query);
+        if (!matchesSearch) return false;
+      }
+
+      // Status filter
+      if (statusFilter.length > 0) {
+        const status = rule.enabled ? 'enabled' : 'disabled';
+        if (!statusFilter.includes(status)) return false;
+      }
+
+      // Severity filter
+      if (severityFilter.length > 0) {
+        if (!severityFilter.includes(rule.severity)) return false;
+      }
+
+      // Backend filter
+      if (backendFilter.length > 0) {
+        if (!backendFilter.includes(rule.datasourceType)) return false;
+      }
+
+      return true;
+    });
+  }, [rules, searchQuery, statusFilter, severityFilter, backendFilter]);
+
+  // Get unique values for filters
+  const statusOptions = useMemo(() => [
+    { label: 'Enabled', checked: statusFilter.includes('enabled') ? 'on' : undefined },
+    { label: 'Disabled', checked: statusFilter.includes('disabled') ? 'on' : undefined },
+  ], [statusFilter]);
+
+  const severityOptions = useMemo(() => {
+    const severities = Array.from(new Set(rules.map(r => r.severity)));
+    return severities.map(s => ({
+      label: s.charAt(0).toUpperCase() + s.slice(1),
+      checked: severityFilter.includes(s) ? 'on' : undefined,
+    }));
+  }, [rules, severityFilter]);
+
+  const backendOptions = useMemo(() => {
+    const backends = Array.from(new Set(rules.map(r => r.datasourceType)));
+    return backends.map(b => ({
+      label: b.charAt(0).toUpperCase() + b.slice(1),
+      checked: backendFilter.includes(b) ? 'on' : undefined,
+    }));
+  }, [rules, backendFilter]);
+
+  const handleStatusFilterChange = (options: any[]) => {
+    const selected = options.filter(o => o.checked === 'on').map(o => o.label.toLowerCase());
+    setStatusFilter(selected);
+  };
+
+  const handleSeverityFilterChange = (options: any[]) => {
+    const selected = options.filter(o => o.checked === 'on').map(o => o.label.toLowerCase());
+    setSeverityFilter(selected);
+  };
+
+  const handleBackendFilterChange = (options: any[]) => {
+    const selected = options.filter(o => o.checked === 'on').map(o => o.label.toLowerCase());
+    setBackendFilter(selected);
+  };
+
+  const activeFilterCount = statusFilter.length + severityFilter.length + backendFilter.length;
+
 
   // --- Alert columns ---
   const alertColumns = [
@@ -170,10 +259,116 @@ export const AlarmsPage: React.FC<AlarmsPageProps> = ({ apiClient }) => {
     }
     if (activeTab === 'rules') {
       if (!loading && rules.length === 0) return <EuiEmptyPrompt title={<h2>No Rules</h2>} body={<p>No alerting rules configured.</p>} />;
-      return <EuiBasicTable items={rules} columns={ruleColumns} loading={loading} />;
+      if (!loading && filteredRules.length === 0 && (searchQuery || activeFilterCount > 0)) {
+        return <EuiEmptyPrompt title={<h2>No Matching Rules</h2>} body={<p>Try adjusting your search or filters.</p>} />;
+      }
+      return <EuiBasicTable items={filteredRules} columns={ruleColumns} loading={loading} />;
     }
     if (!loading && datasources.length === 0) return <EuiEmptyPrompt title={<h2>No Datasources</h2>} body={<p>Add a datasource to get started.</p>} />;
     return <EuiBasicTable items={datasources} columns={datasourceColumns} loading={loading} />;
+  };
+
+  const renderSearchAndFilters = () => {
+    if (activeTab !== 'rules') return null;
+
+    return (
+      <>
+        <EuiFlexGroup gutterSize="m" alignItems="center">
+          <EuiFlexItem grow={true}>
+            <EuiFieldSearch
+              placeholder="Search rules by name, query, or group..."
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              isClearable
+              fullWidth
+              aria-label="Search rules"
+            />
+          </EuiFlexItem>
+          <EuiFlexItem grow={false}>
+            <EuiFilterGroup>
+              <EuiPopover
+                button={
+                  <EuiFilterButton
+                    iconType="arrowDown"
+                    onClick={() => setIsStatusPopoverOpen(!isStatusPopoverOpen)}
+                    isSelected={isStatusPopoverOpen}
+                    numFilters={statusFilter.length}
+                    hasActiveFilters={statusFilter.length > 0}
+                    numActiveFilters={statusFilter.length}
+                  >
+                    Status
+                  </EuiFilterButton>
+                }
+                isOpen={isStatusPopoverOpen}
+                closePopover={() => setIsStatusPopoverOpen(false)}
+                panelPaddingSize="none"
+              >
+                <EuiSelectable
+                  options={statusOptions}
+                  onChange={handleStatusFilterChange}
+                  aria-label="Filter by status"
+                >
+                  {(list) => <div style={{ width: 200 }}>{list}</div>}
+                </EuiSelectable>
+              </EuiPopover>
+
+              <EuiPopover
+                button={
+                  <EuiFilterButton
+                    iconType="arrowDown"
+                    onClick={() => setIsSeverityPopoverOpen(!isSeverityPopoverOpen)}
+                    isSelected={isSeverityPopoverOpen}
+                    numFilters={severityFilter.length}
+                    hasActiveFilters={severityFilter.length > 0}
+                    numActiveFilters={severityFilter.length}
+                  >
+                    Severity
+                  </EuiFilterButton>
+                }
+                isOpen={isSeverityPopoverOpen}
+                closePopover={() => setIsSeverityPopoverOpen(false)}
+                panelPaddingSize="none"
+              >
+                <EuiSelectable
+                  options={severityOptions}
+                  onChange={handleSeverityFilterChange}
+                  aria-label="Filter by severity"
+                >
+                  {(list) => <div style={{ width: 200 }}>{list}</div>}
+                </EuiSelectable>
+              </EuiPopover>
+
+              <EuiPopover
+                button={
+                  <EuiFilterButton
+                    iconType="arrowDown"
+                    onClick={() => setIsBackendPopoverOpen(!isBackendPopoverOpen)}
+                    isSelected={isBackendPopoverOpen}
+                    numFilters={backendFilter.length}
+                    hasActiveFilters={backendFilter.length > 0}
+                    numActiveFilters={backendFilter.length}
+                  >
+                    Backend
+                  </EuiFilterButton>
+                }
+                isOpen={isBackendPopoverOpen}
+                closePopover={() => setIsBackendPopoverOpen(false)}
+                panelPaddingSize="none"
+              >
+                <EuiSelectable
+                  options={backendOptions}
+                  onChange={handleBackendFilterChange}
+                  aria-label="Filter by backend"
+                >
+                  {(list) => <div style={{ width: 200 }}>{list}</div>}
+                </EuiSelectable>
+              </EuiPopover>
+            </EuiFilterGroup>
+          </EuiFlexItem>
+        </EuiFlexGroup>
+        <EuiSpacer size="m" />
+      </>
+    );
   };
 
   return (
@@ -191,6 +386,7 @@ export const AlarmsPage: React.FC<AlarmsPageProps> = ({ apiClient }) => {
           ))}
         </EuiTabs>
         <EuiSpacer />
+        {renderSearchAndFilters()}
         {renderTable()}
       </EuiPageBody>
     </EuiPage>
