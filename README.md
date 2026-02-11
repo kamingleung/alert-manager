@@ -1,12 +1,11 @@
 <img src="https://opensearch.org/wp-content/uploads/2025/01/opensearch_logo_default.svg" height="64px">
 
 - [Alert Manager](#alert-manager)
-  - [Tri-Mode Architecture](#tri-mode-architecture)
+  - [Dual-Mode Architecture](#dual-mode-architecture)
   - [Features](#features)
   - [Quick Start](#quick-start)
     - [1. OSD Plugin Mode](#1-osd-plugin-mode)
     - [2. Standalone Mode (npx)](#2-standalone-mode-npx)
-    - [3. VS Code Extension](#3-vs-code-extension)
   - [Code Summary](#code-summary)
   - [API Reference](#api-reference)
   - [Architecture](#architecture)
@@ -19,49 +18,48 @@
 
 # Alert Manager
 
-Alert Manager is a plugin for OpenSearch Dashboards that provides alert rule management and monitoring for **OpenSearch Alerting** and **Amazon Managed Prometheus (AMP)** backends. It supports three distribution modes — run as an OSD plugin, a standalone npx service, or a VS Code extension.
+Alert Manager is a plugin for OpenSearch Dashboards that provides alert rule management and monitoring for **OpenSearch Alerting** and **Amazon Managed Prometheus (AMP)** backends. It supports two distribution modes — run as an OSD plugin or a standalone npx service.
 
-## Tri-Mode Architecture
+## Dual-Mode Architecture
 
-A single codebase, three ways to run it:
+A single codebase, two ways to run it:
 
 ```
 ┌─────────────────────────────────────────────────────────────────────┐
 │                        Shared Core Layer                            │
 │   core/types.ts · core/alert_service.ts · core/mock_backend.ts      │
 │   core/datasource_service.ts · server/routes/handlers.ts            │
-└──────────┬──────────────────────┬──────────────────────┬────────────┘
-           │                      │                      │
-     ┌─────▼──────┐        ┌─────▼──────┐        ┌──────▼─────┐
-     │  OSD Plugin │        │  Standalone │        │  VS Code   │
-     │    Mode     │        │  npx Mode   │        │  Extension │
-     ├────────────┤        ├────────────┤        ├────────────┤
-     │ Hapi server │        │ Express    │        │ Express    │
-     │ OSD IRouter │        │ server.ts  │        │ in-process │
-     │ Full OSD UI │        │ Webpack UI │        │ Webview    │
-     ├────────────┤        ├────────────┤        ├────────────┤
-     │ Cloud / SaaS│        │ Dev / Light│        │ IDE-native │
-     │ Production  │        │ Prototyping│        │ Debugging  │
-     └────────────┘        └────────────┘        └────────────┘
-          ▲                      ▲                      ▲
-          │                      │                      │
-    OSD + Browser          npx + Browser          VS Code Panel
+└──────────┬──────────────────────┬───────────────────────────────────┘
+           │                      │
+     ┌─────▼──────┐        ┌─────▼──────┐
+     │  OSD Plugin │        │  Standalone │
+     │    Mode     │        │  npx Mode   │
+     ├────────────┤        ├────────────┤
+     │ Hapi server │        │ Express    │
+     │ OSD IRouter │        │ server.ts  │
+     │ Full OSD UI │        │ Webpack UI │
+     ├────────────┤        ├────────────┤
+     │ Cloud / SaaS│        │ Dev / Light│
+     │ Production  │        │ Prototyping│
+     └────────────┘        └────────────┘
+          ▲                      ▲
+          │                      │
+    OSD + Browser          npx + Browser
 ```
 
 | Mode | Use Case | How to Run | Port |
 |------|----------|-----------|------|
 | OSD Plugin | Production / Cloud / SaaS | `yarn start` inside OSD | 5601 |
 | Standalone (npx) | Quick dev, demos, lightweight serving | `npx @anirudhaj/alarms` | 5603 |
-| VS Code Extension | IDE-integrated alerting during development | Install `.vsix`, Cmd+Shift+P → "Alert Manager: Open" | 5603 |
 
-All three modes share the same **core services**, **route handlers**, and **API shape**. The only difference is the hosting layer.
+Both modes share the same **core services**, **route handlers**, **UI components**, and **API shape**. The only difference is the hosting layer.
 
 ## Features
 
-- 🚀 **Tri-Mode** — OSD plugin, standalone npx, or VS Code extension
-- ⚡ **Instant Startup** — Standalone and VS Code modes start in ~1 second
+- 🚀 **Dual-Mode** — OSD plugin or standalone npx
+- ⚡ **Instant Startup** — Standalone mode starts in ~1 second
 - 📦 **Lightweight** — Standalone build is ~4MB vs ~1GB for full OSD
-- 🎨 **Full UI** — OUI-based interface in all modes
+- 🎨 **Full UI** — OUI-based interface in both modes
 - 🔌 **REST API** — OpenSearch Alerting and Prometheus-native API shapes
 - 🔄 **Hot Reload** — Development mode with live updates
 - 🧪 **Mock Mode** — Seeded OpenSearch and Prometheus data out of the box
@@ -103,23 +101,6 @@ MOCK_MODE=false npx @anirudhaj/alarms
 ```
 
 Open http://localhost:5603 in your browser.
-
-### 3. VS Code Extension
-
-For IDE-integrated alert management:
-
-```bash
-# Install the extension
-code --install-extension vscode-extension/alert-manager-vscode-1.1.1.vsix
-```
-
-Then open the command palette (Cmd+Shift+P) and run **Alert Manager: Open**. The UI opens in a webview panel. You can drag it to the bottom pane next to the terminal.
-
-Commands:
-- `Alert Manager: Open` — Start server and open the UI
-- `Alert Manager: Stop Server` — Stop the background server
-
-Configure the port in VS Code settings: `alertManager.port` (default: 5603)
 
 ## Code Summary
 
@@ -219,19 +200,14 @@ alert-manager/
 │   │   └── index.ts         # OSD IRouter adapter
 │   ├── plugin.ts            # OSD server plugin
 │   └── types.ts
-├── public/                  # OSD client-side code
-│   ├── components/
-│   ├── services/
+├── public/                  # Client-side code (shared UI)
+│   ├── components/          # React components (used by both modes)
+│   ├── services/            # API client (configurable for OSD/standalone)
 │   └── plugin.ts
 ├── standalone/              # Standalone distribution (npx)
 │   ├── bin/cli.js           # npx entry point
 │   ├── server.ts            # Express server
-│   ├── client.tsx           # React entry
-│   └── components/          # Standalone UI
-├── vscode-extension/        # VS Code extension
-│   ├── src/extension.ts     # Extension activation, webview panel
-│   ├── src/server-manager.ts# In-process Express server
-│   └── esbuild.js           # Bundles extension into single file
+│   └── client.tsx           # React entry (imports shared UI from public/)
 └── common/                  # Shared constants
 ```
 
@@ -252,12 +228,6 @@ npm run dev
 # OSD plugin development
 cd /path/to/OpenSearch-Dashboards
 yarn start
-
-# VS Code extension development
-cd vscode-extension
-npm install
-npm run build
-# Then press F5 in VS Code to launch Extension Development Host
 ```
 
 ### Publishing
