@@ -30,7 +30,7 @@ function createOsdHttpClient(http: CoreStart['http']): HttpClient {
 }
 
 export const AlarmsApp = ({ basename, notifications, http, navigation }: AlarmsAppDeps) => {
-  const apiClient = new AlarmsApiClient(createOsdHttpClient(http));
+  const apiClient = new AlarmsApiClient(createOsdHttpClient(http), 'osd');
 
   return (
     <Router basename={basename}>

@@ -1,8 +1,9 @@
 /**
- * HTTP client for the alarms API.
- * Works in both OSD and standalone mode via the basePath abstraction.
+ * HTTP client for the Alert Manager API.
+ * Works in both OSD and standalone mode via the HttpClient abstraction.
+ * API paths are configurable to support different route prefixes.
  */
-import { Alarm, CreateAlarmInput } from '../../core';
+import { Datasource, UnifiedAlert, UnifiedRule } from '../../core';
 
 export interface HttpClient {
   get<T = any>(path: string): Promise<T>;
@@ -10,27 +11,43 @@ export interface HttpClient {
   delete<T = any>(path: string): Promise<T>;
 }
 
+export interface ApiPaths {
+  datasources: string;
+  alerts: string;
+  rules: string;
+}
+
+const OSD_PATHS: ApiPaths = {
+  datasources: '/api/alerting/datasources',
+  alerts: '/api/alerting/unified/alerts',
+  rules: '/api/alerting/unified/rules',
+};
+
+const STANDALONE_PATHS: ApiPaths = {
+  datasources: '/api/datasources',
+  alerts: '/api/alerts',
+  rules: '/api/rules',
+};
+
 export class AlarmsApiClient {
-  constructor(private readonly http: HttpClient) {}
+  private readonly paths: ApiPaths;
 
-  async list(): Promise<Alarm[]> {
-    const res = await this.http.get<{ alarms: Alarm[] }>('/api/alarms');
-    return res.alarms;
+  constructor(private readonly http: HttpClient, mode: 'osd' | 'standalone' = 'osd') {
+    this.paths = mode === 'standalone' ? STANDALONE_PATHS : OSD_PATHS;
   }
 
-  async get(id: string): Promise<Alarm> {
-    return this.http.get<Alarm>(`/api/alarms/${id}`);
+  async listDatasources(): Promise<Datasource[]> {
+    const res = await this.http.get<{ datasources: Datasource[] }>(this.paths.datasources);
+    return res.datasources;
   }
 
-  async create(input: CreateAlarmInput): Promise<Alarm> {
-    return this.http.post<Alarm>('/api/alarms', input);
+  async listAlerts(): Promise<UnifiedAlert[]> {
+    const res = await this.http.get<{ alerts: UnifiedAlert[] }>(this.paths.alerts);
+    return res.alerts;
   }
 
-  async delete(id: string): Promise<void> {
-    await this.http.delete(`/api/alarms/${id}`);
-  }
-
-  async toggle(id: string): Promise<Alarm> {
-    return this.http.post<Alarm>(`/api/alarms/${id}/toggle`);
+  async listRules(): Promise<UnifiedRule[]> {
+    const res = await this.http.get<{ rules: UnifiedRule[] }>(this.paths.rules);
+    return res.rules;
   }
 }

@@ -8,7 +8,13 @@ import {
 
 import { AlarmsPluginSetup, AlarmsPluginStart } from './types';
 import { defineRoutes } from './routes';
-import { InMemoryAlarmService, AlarmsLogger } from '../core';
+import {
+  InMemoryDatasourceService,
+  MultiBackendAlertService,
+  MockOpenSearchBackend,
+  MockPrometheusBackend,
+  Logger as AlarmsLogger,
+} from '../core';
 
 export class AlarmsPlugin implements Plugin<AlarmsPluginSetup, AlarmsPluginStart> {
   private readonly logger: Logger;
@@ -21,7 +27,6 @@ export class AlarmsPlugin implements Plugin<AlarmsPluginSetup, AlarmsPluginStart
     this.logger.debug('alarms: Setup');
     const router = core.http.createRouter();
 
-    // Adapt OSD logger to our platform-agnostic interface
     const logger: AlarmsLogger = {
       info: (msg) => this.logger.info(msg),
       warn: (msg) => this.logger.warn(msg),
@@ -29,8 +34,20 @@ export class AlarmsPlugin implements Plugin<AlarmsPluginSetup, AlarmsPluginStart
       debug: (msg) => this.logger.debug(msg),
     };
 
-    const service = new InMemoryAlarmService(logger);
-    defineRoutes(router, service);
+    const datasourceService = new InMemoryDatasourceService(logger);
+    const alertService = new MultiBackendAlertService(datasourceService, logger);
+
+    const osBackend = new MockOpenSearchBackend(logger);
+    const promBackend = new MockPrometheusBackend(logger);
+    alertService.registerOpenSearch(osBackend);
+    alertService.registerPrometheus(promBackend);
+
+    datasourceService.seed([
+      { name: 'Local OpenSearch', type: 'opensearch', url: 'http://localhost:9200', enabled: true },
+      { name: 'Local Prometheus', type: 'prometheus', url: 'http://localhost:9090', enabled: true },
+    ]);
+
+    defineRoutes(router, datasourceService, alertService);
 
     return {};
   }

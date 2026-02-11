@@ -22,6 +22,8 @@ module.exports = {
       'react-router-dom': path.resolve(__dirname, 'node_modules/react-router-dom'),
       // Map @opensearch/datemath to @elastic/datemath (OUI peer dependency)
       '@opensearch/datemath': path.resolve(__dirname, 'node_modules/@elastic/datemath'),
+      // Map @elastic/eui to @opensearch-project/oui so shared components resolve correctly
+      '@elastic/eui': path.resolve(__dirname, 'node_modules/@opensearch-project/oui'),
     }
   },
   module: {

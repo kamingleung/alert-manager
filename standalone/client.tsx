@@ -1,5 +1,6 @@
 /**
  * Standalone React entry point — no OSD dependencies.
+ * Reuses the same AlarmsPage component and API client as the OSD plugin.
  */
 import React from 'react';
 import ReactDOM from 'react-dom';
@@ -11,9 +12,8 @@ import '@opensearch-project/oui/dist/eui_theme_light.css';
 // OUI Context for proper styling
 import { OuiContext } from '@opensearch-project/oui/lib/components/context';
 
-import { AlarmsPage, AlarmsApiClient, HttpClient } from './components/alarms_page';
-
-console.log('Alarms standalone app loading...');
+import { AlarmsPage } from '../public/components/alarms_page';
+import { AlarmsApiClient, HttpClient } from '../public/services/alarms_client';
 
 /** Simple fetch-based HTTP client for standalone mode */
 const standaloneHttp: HttpClient = {
@@ -38,25 +38,19 @@ const standaloneHttp: HttpClient = {
   },
 };
 
-const apiClient = new AlarmsApiClient(standaloneHttp);
+const apiClient = new AlarmsApiClient(standaloneHttp, 'standalone');
 
-const App = () => {
-  console.log('App component rendering...');
-  return (
-    <OuiContext>
-      <Router>
-        <AlarmsPage apiClient={apiClient} />
-      </Router>
-    </OuiContext>
-  );
-};
+const App = () => (
+  <OuiContext>
+    <Router>
+      <AlarmsPage apiClient={apiClient} />
+    </Router>
+  </OuiContext>
+);
 
 const rootElement = document.getElementById('root');
-console.log('Root element:', rootElement);
-
 if (rootElement) {
   ReactDOM.render(<App />, rootElement);
-  console.log('React app mounted');
 } else {
   console.error('Root element not found!');
 }

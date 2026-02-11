@@ -3,77 +3,228 @@
  */
 import { schema } from '@osd/config-schema';
 import { IRouter } from '../../../../src/core/server';
-import { AlarmService } from '../../core';
+import { DatasourceService, MultiBackendAlertService } from '../../core';
 import {
-  handleListAlarms,
-  handleGetAlarm,
-  handleCreateAlarm,
-  handleDeleteAlarm,
-  handleToggleAlarm,
+  handleListDatasources,
+  handleGetDatasource,
+  handleCreateDatasource,
+  handleUpdateDatasource,
+  handleDeleteDatasource,
+  handleTestDatasource,
+  handleGetOSMonitors,
+  handleGetOSMonitor,
+  handleCreateOSMonitor,
+  handleUpdateOSMonitor,
+  handleDeleteOSMonitor,
+  handleGetOSAlerts,
+  handleAcknowledgeOSAlerts,
+  handleGetPromRuleGroups,
+  handleGetPromAlerts,
+  handleGetUnifiedAlerts,
+  handleGetUnifiedRules,
 } from './handlers';
 
-export function defineRoutes(router: IRouter, service: AlarmService) {
+export function defineRoutes(
+  router: IRouter,
+  datasourceService: DatasourceService,
+  alertService: MultiBackendAlertService
+) {
+  // Datasource routes
   router.get(
-    { path: '/api/alarms', validate: false },
+    { path: '/api/alerting/datasources', validate: false },
     async (_ctx, _req, res) => {
-      const result = await handleListAlarms(service);
+      const result = await handleListDatasources(datasourceService);
       return res.ok({ body: result.body });
     }
   );
 
   router.get(
     {
-      path: '/api/alarms/{id}',
+      path: '/api/alerting/datasources/{id}',
       validate: { params: schema.object({ id: schema.string() }) },
     },
     async (_ctx, req, res) => {
-      const result = await handleGetAlarm(service, req.params.id);
+      const result = await handleGetDatasource(datasourceService, req.params.id);
       return result.status === 200 ? res.ok({ body: result.body }) : res.notFound({ body: result.body });
     }
   );
 
   router.post(
     {
-      path: '/api/alarms',
+      path: '/api/alerting/datasources',
       validate: {
         body: schema.object({
           name: schema.string(),
-          severity: schema.oneOf([
-            schema.literal('critical'),
-            schema.literal('high'),
-            schema.literal('medium'),
-            schema.literal('low'),
-          ]),
-          condition: schema.string(),
+          type: schema.oneOf([schema.literal('opensearch'), schema.literal('prometheus')]),
+          url: schema.string(),
           enabled: schema.maybe(schema.boolean()),
         }),
       },
     },
     async (_ctx, req, res) => {
-      const result = await handleCreateAlarm(service, req.body);
+      const result = await handleCreateDatasource(datasourceService, req.body as any);
       return res.ok({ body: result.body });
+    }
+  );
+
+  router.put(
+    {
+      path: '/api/alerting/datasources/{id}',
+      validate: {
+        params: schema.object({ id: schema.string() }),
+        body: schema.object({
+          name: schema.maybe(schema.string()),
+          url: schema.maybe(schema.string()),
+          enabled: schema.maybe(schema.boolean()),
+        }),
+      },
+    },
+    async (_ctx, req, res) => {
+      const result = await handleUpdateDatasource(datasourceService, req.params.id, req.body as any);
+      return result.status === 200 ? res.ok({ body: result.body }) : res.notFound({ body: result.body });
     }
   );
 
   router.delete(
     {
-      path: '/api/alarms/{id}',
+      path: '/api/alerting/datasources/{id}',
       validate: { params: schema.object({ id: schema.string() }) },
     },
     async (_ctx, req, res) => {
-      const result = await handleDeleteAlarm(service, req.params.id);
+      const result = await handleDeleteDatasource(datasourceService, req.params.id);
       return result.status === 200 ? res.ok({ body: result.body }) : res.notFound({ body: result.body });
     }
   );
 
   router.post(
     {
-      path: '/api/alarms/{id}/toggle',
+      path: '/api/alerting/datasources/{id}/test',
       validate: { params: schema.object({ id: schema.string() }) },
     },
     async (_ctx, req, res) => {
-      const result = await handleToggleAlarm(service, req.params.id);
+      const result = await handleTestDatasource(datasourceService, req.params.id);
+      return res.ok({ body: result.body });
+    }
+  );
+
+  // Unified view routes
+  router.get(
+    { path: '/api/alerting/unified/alerts', validate: false },
+    async (_ctx, _req, res) => {
+      const result = await handleGetUnifiedAlerts(alertService);
+      return res.ok({ body: result.body });
+    }
+  );
+
+  router.get(
+    { path: '/api/alerting/unified/rules', validate: false },
+    async (_ctx, _req, res) => {
+      const result = await handleGetUnifiedRules(alertService);
+      return res.ok({ body: result.body });
+    }
+  );
+
+  // OpenSearch monitor/alert routes
+  router.get(
+    {
+      path: '/api/alerting/opensearch/{dsId}/monitors',
+      validate: { params: schema.object({ dsId: schema.string() }) },
+    },
+    async (_ctx, req, res) => {
+      const result = await handleGetOSMonitors(alertService, req.params.dsId);
+      return result.status === 200 ? res.ok({ body: result.body }) : res.badRequest({ body: result.body });
+    }
+  );
+
+  router.get(
+    {
+      path: '/api/alerting/opensearch/{dsId}/monitors/{monitorId}',
+      validate: { params: schema.object({ dsId: schema.string(), monitorId: schema.string() }) },
+    },
+    async (_ctx, req, res) => {
+      const result = await handleGetOSMonitor(alertService, req.params.dsId, req.params.monitorId);
       return result.status === 200 ? res.ok({ body: result.body }) : res.notFound({ body: result.body });
+    }
+  );
+
+  router.post(
+    {
+      path: '/api/alerting/opensearch/{dsId}/monitors',
+      validate: { params: schema.object({ dsId: schema.string() }), body: schema.any() },
+    },
+    async (_ctx, req, res) => {
+      const result = await handleCreateOSMonitor(alertService, req.params.dsId, req.body);
+      return res.ok({ body: result.body });
+    }
+  );
+
+  router.put(
+    {
+      path: '/api/alerting/opensearch/{dsId}/monitors/{monitorId}',
+      validate: { params: schema.object({ dsId: schema.string(), monitorId: schema.string() }), body: schema.any() },
+    },
+    async (_ctx, req, res) => {
+      const result = await handleUpdateOSMonitor(alertService, req.params.dsId, req.params.monitorId, req.body);
+      return result.status === 200 ? res.ok({ body: result.body }) : res.notFound({ body: result.body });
+    }
+  );
+
+  router.delete(
+    {
+      path: '/api/alerting/opensearch/{dsId}/monitors/{monitorId}',
+      validate: { params: schema.object({ dsId: schema.string(), monitorId: schema.string() }) },
+    },
+    async (_ctx, req, res) => {
+      const result = await handleDeleteOSMonitor(alertService, req.params.dsId, req.params.monitorId);
+      return result.status === 200 ? res.ok({ body: result.body }) : res.notFound({ body: result.body });
+    }
+  );
+
+  router.get(
+    {
+      path: '/api/alerting/opensearch/{dsId}/alerts',
+      validate: { params: schema.object({ dsId: schema.string() }) },
+    },
+    async (_ctx, req, res) => {
+      const result = await handleGetOSAlerts(alertService, req.params.dsId);
+      return result.status === 200 ? res.ok({ body: result.body }) : res.badRequest({ body: result.body });
+    }
+  );
+
+  router.post(
+    {
+      path: '/api/alerting/opensearch/{dsId}/monitors/{monitorId}/acknowledge',
+      validate: {
+        params: schema.object({ dsId: schema.string(), monitorId: schema.string() }),
+        body: schema.object({ alerts: schema.arrayOf(schema.string()) }),
+      },
+    },
+    async (_ctx, req, res) => {
+      const result = await handleAcknowledgeOSAlerts(alertService, req.params.dsId, req.params.monitorId, req.body);
+      return res.ok({ body: result.body });
+    }
+  );
+
+  // Prometheus routes
+  router.get(
+    {
+      path: '/api/alerting/prometheus/{dsId}/rules',
+      validate: { params: schema.object({ dsId: schema.string() }) },
+    },
+    async (_ctx, req, res) => {
+      const result = await handleGetPromRuleGroups(alertService, req.params.dsId);
+      return result.status === 200 ? res.ok({ body: result.body }) : res.badRequest({ body: result.body });
+    }
+  );
+
+  router.get(
+    {
+      path: '/api/alerting/prometheus/{dsId}/alerts',
+      validate: { params: schema.object({ dsId: schema.string() }) },
+    },
+    async (_ctx, req, res) => {
+      const result = await handleGetPromAlerts(alertService, req.params.dsId);
+      return result.status === 200 ? res.ok({ body: result.body }) : res.badRequest({ body: result.body });
     }
   );
 }
