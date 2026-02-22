@@ -14,6 +14,7 @@ import {
   EuiBadge,
   EuiPanel,
 } from '@opensearch-project/oui';
+import { validatePromQL as coreValidatePromQL, prettifyPromQL as corePrettifyPromQL } from '../../core/promql_validator';
 
 // ============================================================================
 // PromQL Language Data
@@ -216,56 +217,14 @@ export interface ValidationError {
 }
 
 export function validatePromQL(query: string): ValidationError[] {
+  const result = coreValidatePromQL(query);
   const errors: ValidationError[] = [];
-  if (!query.trim()) return errors;
-
-  // Bracket matching
-  const stack: { char: string; pos: number }[] = [];
-  const pairs: Record<string, string> = { '(': ')', '[': ']', '{': '}' };
-  const closing: Record<string, string> = { ')': '(', ']': '[', '}': '{' };
-  for (let i = 0; i < query.length; i++) {
-    if (pairs[query[i]]) stack.push({ char: query[i], pos: i });
-    else if (closing[query[i]]) {
-      if (stack.length === 0 || stack[stack.length - 1].char !== closing[query[i]]) {
-        errors.push({ message: `Unmatched '${query[i]}' at position ${i}`, severity: 'error', position: i });
-      } else { stack.pop(); }
-    }
+  for (const e of result.errors) {
+    errors.push({ message: e.message, severity: e.severity, position: e.position });
   }
-  for (const s of stack) {
-    errors.push({ message: `Unclosed '${s.char}' at position ${s.pos}`, severity: 'error', position: s.pos });
+  for (const w of result.warnings) {
+    errors.push({ message: w.message, severity: w.severity, position: w.position });
   }
-
-  // Empty label matchers
-  if (/\{\s*\}/.test(query)) {
-    errors.push({ message: 'Empty label matcher — consider adding filters to reduce cardinality', severity: 'warning' });
-  }
-
-  // Missing range vector for rate/irate/increase/etc
-  const rangeRequired = ['rate', 'irate', 'increase', 'delta', 'deriv', 'changes', 'resets',
-    'avg_over_time', 'min_over_time', 'max_over_time', 'sum_over_time', 'count_over_time',
-    'quantile_over_time', 'last_over_time', 'absent_over_time', 'predict_linear'];
-  for (const fn of rangeRequired) {
-    const regex = new RegExp(`\\b${fn}\\s*\\((?![^)]*\\[)`);
-    if (regex.test(query)) {
-      errors.push({ message: `${fn}() requires a range vector selector [duration], e.g. ${fn}(metric[5m])`, severity: 'error' });
-    }
-  }
-
-  // Warn about high-cardinality patterns
-  if (/\brate\b.*\{[^}]*\}/.test(query) === false && /\brate\b/.test(query)) {
-    errors.push({ message: 'Consider adding label filters to rate() to reduce cardinality', severity: 'info' });
-  }
-
-  // Check for unknown functions
-  const funcPattern = /\b([a-zA-Z_][a-zA-Z0-9_]*)\s*\(/g;
-  let match;
-  while ((match = funcPattern.exec(query)) !== null) {
-    const name = match[1];
-    if (!PROMQL_FUNCTIONS[name] && !['by', 'without', 'on', 'ignoring', 'group_left', 'group_right'].includes(name)) {
-      // Could be a metric name used with {} — not an error
-    }
-  }
-
   return errors;
 }
 
@@ -274,17 +233,7 @@ export function validatePromQL(query: string): ValidationError[] {
 // ============================================================================
 
 function prettifyPromQL(query: string): string {
-  let result = query.trim();
-  // Normalize spaces around operators
-  result = result.replace(/\s*([\+\-\*\/\%\^])\s*/g, ' $1 ');
-  result = result.replace(/\s*(==|!=|>=|<=|>|<|=~|!~)\s*/g, ' $1 ');
-  // Newline after ) by/without
-  result = result.replace(/\)\s*(by|without)\s*\(/g, ')\n  $1 (');
-  // Newline after aggregation operators
-  result = result.replace(/(sum|avg|min|max|count|stddev|topk|bottomk|quantile)\s*\(/g, '$1(\n  ');
-  // Clean up multiple spaces
-  result = result.replace(/  +/g, ' ');
-  return result;
+  return corePrettifyPromQL(query);
 }
 
 // ============================================================================

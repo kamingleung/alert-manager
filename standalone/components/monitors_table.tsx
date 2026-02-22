@@ -36,6 +36,7 @@ import {
   MonitorHealthStatus,
   Datasource,
 } from '../../core';
+import { serializeMonitors } from '../../core/serializer';
 import { MonitorDetailFlyout } from './monitor_detail_flyout';
 
 // ============================================================================
@@ -90,6 +91,7 @@ interface MonitorsTableProps {
   onDelete: (ids: string[]) => void;
   onClone?: (monitor: UnifiedRule) => void;
   onSilence?: (id: string) => void;
+  onImport?: (configs: any[]) => void;
 }
 
 // ============================================================================
@@ -297,7 +299,7 @@ const BASE_COLUMNS: ColumnDef[] = [
 ];
 
 const DEFAULT_VISIBLE: ColumnId[] = [
-  'name', 'status', 'severity', 'monitorType', 'healthStatus', 'labels', 'backend', 'datasource', 'lastTriggered',
+  'name', 'status', 'severity', 'monitorType', 'healthStatus', 'backend', 'datasource',
 ];
 
 // ============================================================================
@@ -306,8 +308,8 @@ const DEFAULT_VISIBLE: ColumnId[] = [
 
 // Default widths per column
 const DEFAULT_WIDTHS: Record<string, number> = {
-  name: 180, status: 100, severity: 100, monitorType: 120, healthStatus: 90,
-  labels: 280, backend: 110, datasource: 140, createdBy: 110, createdAt: 130,
+  name: 220, status: 100, severity: 100, monitorType: 110, healthStatus: 90,
+  labels: 260, backend: 110, datasource: 150, createdBy: 110, createdAt: 130,
   lastModified: 160, lastTriggered: 160, destinations: 160, query: 200, group: 100,
 };
 
@@ -397,7 +399,7 @@ function useResizableColumns(
 // Main Component
 // ============================================================================
 
-export const MonitorsTable: React.FC<MonitorsTableProps> = ({ rules, datasources, loading, onDelete, onClone, onSilence }) => {
+export const MonitorsTable: React.FC<MonitorsTableProps> = ({ rules, datasources, loading, onDelete, onClone, onSilence, onImport }) => {
   const [searchQuery, setSearchQuery] = useState('');
   const [filters, setFilters] = useState<FilterState>(emptyFilters());
   const [sortField, setSortField] = useState<string>('name');
@@ -520,21 +522,35 @@ export const MonitorsTable: React.FC<MonitorsTableProps> = ({ rules, datasources
 
   // Export
   const exportJson = () => {
-    const data = filtered.map(r => ({
-      id: r.id, name: r.name, status: r.status, severity: r.severity,
-      monitorType: r.monitorType, healthStatus: r.healthStatus,
-      datasourceType: r.datasourceType, datasourceId: r.datasourceId,
-      labels: r.labels, annotations: r.annotations,
-      createdBy: r.createdBy, createdAt: r.createdAt,
-      lastModified: r.lastModified, lastTriggered: r.lastTriggered,
-      query: r.query, condition: r.condition,
-      notificationDestinations: r.notificationDestinations,
-    }));
-    const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+    const configs = serializeMonitors(filtered);
+    const blob = new Blob([JSON.stringify(configs, null, 2)], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url; a.download = 'monitors-export.json'; a.click();
     URL.revokeObjectURL(url);
+  };
+
+  // Import
+  const handleImportFile = () => {
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.accept = '.json';
+    input.onchange = (e: any) => {
+      const file = e.target?.files?.[0];
+      if (!file) return;
+      const reader = new FileReader();
+      reader.onload = (ev) => {
+        try {
+          const data = JSON.parse(ev.target?.result as string);
+          const configs = Array.isArray(data) ? data : data.monitors;
+          if (onImport && Array.isArray(configs)) onImport(configs);
+        } catch (_err) {
+          alert('Invalid JSON file');
+        }
+      };
+      reader.readAsText(file);
+    };
+    input.click();
   };
 
   // Bulk delete
@@ -853,7 +869,7 @@ export const MonitorsTable: React.FC<MonitorsTableProps> = ({ rules, datasources
   };
 
   return (
-    <EuiFlexGroup gutterSize="m" responsive={false}>
+    <EuiFlexGroup gutterSize="m" responsive={false} style={{ height: 'calc(100vh - 260px)', minHeight: 400 }}>
       {/* ===== Left Facet Sidebar ===== */}
       <EuiFlexItem grow={false} style={{ width: 220, minWidth: 220 }}>
         <EuiPanel paddingSize="s" hasBorder style={{ position: 'sticky', top: 8, maxHeight: 'calc(100vh - 180px)', overflowY: 'auto' }}>
@@ -933,9 +949,9 @@ export const MonitorsTable: React.FC<MonitorsTableProps> = ({ rules, datasources
       </EuiFlexItem>
 
       {/* ===== Right Content Area ===== */}
-      <EuiFlexItem>
+      <EuiFlexItem style={{ display: 'flex', flexDirection: 'column', minHeight: 0 }}>
         {/* Search bar with suggestions */}
-        <div ref={searchRef} style={{ position: 'relative' }}>
+        <div ref={searchRef} style={{ position: 'relative', flexShrink: 0 }}>
           <EuiFieldSearch
             placeholder="Search monitors by name, labels (team:infra), annotations..."
             value={searchQuery}
@@ -975,6 +991,7 @@ export const MonitorsTable: React.FC<MonitorsTableProps> = ({ rules, datasources
         <EuiSpacer size="s" />
 
         {/* Action bar */}
+        <div style={{ flexShrink: 0 }}>
         <EuiFlexGroup gutterSize="s" alignItems="center" justifyContent="spaceBetween">
           <EuiFlexItem grow={false}>
             <EuiFlexGroup gutterSize="s" alignItems="center">
@@ -1001,6 +1018,13 @@ export const MonitorsTable: React.FC<MonitorsTableProps> = ({ rules, datasources
                   Export
                 </EuiButton>
               </EuiFlexItem>
+              {onImport && (
+                <EuiFlexItem grow={false}>
+                  <EuiButton size="s" iconType="importAction" onClick={handleImportFile}>
+                    Import
+                  </EuiButton>
+                </EuiFlexItem>
+              )}
               <EuiFlexItem grow={false}>
                 <EuiPopover
                   button={
@@ -1030,13 +1054,14 @@ export const MonitorsTable: React.FC<MonitorsTableProps> = ({ rules, datasources
             </EuiFlexGroup>
           </EuiFlexItem>
         </EuiFlexGroup>
+        </div>
 
         <EuiSpacer size="s" />
 
         {/* Table */}
-        <div style={{ overflowX: 'auto' }} className="monitors-table-wrapper" ref={tableWrapperRef}>
+        <div style={{ overflowX: 'auto', overflowY: 'auto', flex: '1 1 auto', minHeight: 200 }} className="monitors-table-wrapper" ref={tableWrapperRef}>
           <style>{`
-            .monitors-table-wrapper .euiTable { table-layout: fixed; }
+            .monitors-table-wrapper .euiTable { table-layout: auto; min-width: 100%; }
             .monitors-table-wrapper .euiTableHeaderCell { position: relative; border-right: 1px solid #D3DAE6; }
             .monitors-table-wrapper .euiTableHeaderCell:last-child { border-right: none; }
             .monitors-table-wrapper .euiTableRowCell { border-right: 1px solid #EDF0F5; }

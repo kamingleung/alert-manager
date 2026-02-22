@@ -6,6 +6,7 @@ import {
   Logger,
   OpenSearchBackend,
   PrometheusBackend,
+  PrometheusWorkspace,
   OSMonitor,
   OSAlert,
   OSAlertState,
@@ -237,15 +238,30 @@ export class MockPrometheusBackend implements PrometheusBackend {
   readonly type = 'prometheus' as const;
   private ruleGroups: Map<string, PromRuleGroup[]> = new Map();
   private activeAlerts: Map<string, PromAlert[]> = new Map();
+  private workspaces: Map<string, PrometheusWorkspace[]> = new Map();
 
   constructor(private readonly logger: Logger) {}
 
   async getRuleGroups(ds: Datasource): Promise<PromRuleGroup[]> {
+    // If workspace-scoped, filter by workspace
+    if (ds.workspaceId) {
+      const allGroups = this.ruleGroups.get(ds.parentDatasourceId || ds.id) ?? [];
+      return allGroups.filter(g => g.file.includes(ds.workspaceId!));
+    }
     return this.ruleGroups.get(ds.id) ?? [];
   }
 
   async getAlerts(ds: Datasource): Promise<PromAlert[]> {
-    return this.activeAlerts.get(ds.id) ?? [];
+    const dsKey = ds.parentDatasourceId || ds.id;
+    const allAlerts = this.activeAlerts.get(dsKey) ?? [];
+    if (ds.workspaceId) {
+      return allAlerts.filter(a => a.labels._workspace === ds.workspaceId);
+    }
+    return allAlerts;
+  }
+
+  async listWorkspaces(ds: Datasource): Promise<PrometheusWorkspace[]> {
+    return this.workspaces.get(ds.id) ?? [];
   }
 
   // --- Seeding ---
@@ -257,18 +273,88 @@ export class MockPrometheusBackend implements PrometheusBackend {
     const oneHourAgo = new Date(Date.now() - 60 * 60_000).toISOString();
     const oneDayAgo = new Date(Date.now() - 24 * 60 * 60_000).toISOString();
 
-    const groups: PromRuleGroup[] = [
+    // Create workspaces for this Prometheus datasource
+    const wsProduction: PrometheusWorkspace = { id: 'ws-prod-001', name: 'production', alias: 'Production Monitoring', region: 'us-east-1', status: 'active' };
+    const wsStaging: PrometheusWorkspace = { id: 'ws-staging-002', name: 'staging', alias: 'Staging Environment', region: 'us-west-2', status: 'active' };
+    const wsDev: PrometheusWorkspace = { id: 'ws-dev-003', name: 'development', alias: 'Dev/Test', region: 'us-west-2', status: 'active' };
+    this.workspaces.set(dsId, [wsProduction, wsStaging, wsDev]);
+
+    const states: PromAlertState[] = ['firing', 'pending', 'inactive'];
+    const severities = ['critical', 'warning', 'info'];
+    const teams = ['infra', 'platform', 'sre', 'data', 'security', 'network'];
+    const services = ['node-exporter', 'api-gateway', 'kubernetes', 'postgres', 'redis', 'kafka', 'nginx', 'blackbox-exporter'];
+    const regions = ['us-east-1', 'us-west-2', 'eu-west-1', 'ap-southeast-1'];
+
+    const allGroups: PromRuleGroup[] = [];
+
+    // Helper to generate rules for a workspace
+    const generateWorkspaceRules = (wsId: string, wsName: string, ruleCount: number) => {
+      const groupCount = Math.ceil(ruleCount / 5);
+      for (let g = 0; g < groupCount; g++) {
+        const groupName = `${wsName}_alerts_group_${g}`;
+        const rules: PromAlertingRule[] = [];
+        const rulesInGroup = Math.min(5, ruleCount - g * 5);
+
+        for (let r = 0; r < rulesInGroup; r++) {
+          const idx = g * 5 + r;
+          const sev = severities[idx % severities.length];
+          const team = teams[idx % teams.length];
+          const service = services[idx % services.length];
+          const region = regions[idx % regions.length];
+          const state = idx < 3 ? 'firing' : idx < 6 ? 'pending' : 'inactive';
+          const ruleName = `${wsName}_rule_${idx}_${service}`;
+
+          const alerts: PromAlert[] = [];
+          if (state === 'firing' || state === 'pending') {
+            alerts.push({
+              labels: {
+                alertname: ruleName, severity: sev, team, service,
+                environment: wsName, region, instance: `i-${idx.toString(16).padStart(7, '0')}:9100`,
+                _workspace: wsId,
+              },
+              annotations: { summary: `${ruleName} on ${service}` },
+              state,
+              activeAt: state === 'firing' ? fiveMinAgo : now,
+              value: `${(Math.random() * 100).toFixed(1)}`,
+            });
+          }
+
+          rules.push({
+            type: 'alerting', name: ruleName, health: 'ok', state,
+            query: `some_metric{service="${service}",workspace="${wsName}"} > ${50 + idx}`,
+            duration: 300,
+            labels: { severity: sev, team, service, environment: wsName, region, application: 'platform', _workspace: wsId },
+            annotations: { summary: `${ruleName} alert on ${service}` },
+            alerts,
+            lastEvaluation: fiveMinAgo, evaluationTime: 0.002,
+          });
+        }
+
+        allGroups.push({
+          name: groupName, file: `/etc/prometheus/rules/${wsId}/${wsName}_${g}.yml`,
+          interval: 60, rules,
+        });
+      }
+    };
+
+    // Production: 30 rules, Staging: 15 rules, Dev: 10 rules = 55 total
+    generateWorkspaceRules(wsProduction.id, 'production', 30);
+    generateWorkspaceRules(wsStaging.id, 'staging', 15);
+    generateWorkspaceRules(wsDev.id, 'development', 10);
+
+    // Also add the original hand-crafted rules for production workspace
+    const handcraftedGroups: PromRuleGroup[] = [
       {
-        name: 'node_alerts', file: '/etc/prometheus/rules/node.yml', interval: 60,
+        name: 'node_alerts', file: `/etc/prometheus/rules/${wsProduction.id}/node.yml`, interval: 60,
         rules: [
           {
             type: 'alerting', name: 'HighCpuUsage', health: 'ok', state: 'firing',
             query: '100 - (avg by(instance) (rate(node_cpu_seconds_total{mode="idle"}[5m])) * 100) > 80',
             duration: 300,
-            labels: { severity: 'warning', team: 'infra', service: 'node-exporter', environment: 'production', region: 'us-east-1', application: 'platform' },
-            annotations: { summary: 'CPU usage above 80% on {{ $labels.instance }}', description: 'CPU has been above 80% for more than 5 minutes.', runbook_url: 'https://wiki.example.com/runbooks/high-cpu' },
+            labels: { severity: 'warning', team: 'infra', service: 'node-exporter', environment: 'production', region: 'us-east-1', application: 'platform', _workspace: wsProduction.id },
+            annotations: { summary: 'CPU usage above 80% on {{ $labels.instance }}', runbook_url: 'https://wiki.example.com/runbooks/high-cpu' },
             alerts: [
-              { labels: { alertname: 'HighCpuUsage', instance: 'i-0abc123:9100', severity: 'warning', team: 'infra', service: 'node-exporter', environment: 'production', region: 'us-east-1' }, annotations: { summary: 'CPU usage above 80% on i-0abc123:9100' }, state: 'firing', activeAt: fiveMinAgo, value: '92.3' },
+              { labels: { alertname: 'HighCpuUsage', instance: 'i-0abc123:9100', severity: 'warning', team: 'infra', service: 'node-exporter', environment: 'production', region: 'us-east-1', _workspace: wsProduction.id }, annotations: { summary: 'CPU usage above 80% on i-0abc123:9100' }, state: 'firing', activeAt: fiveMinAgo, value: '92.3' },
             ],
             lastEvaluation: fiveMinAgo, evaluationTime: 0.003,
           },
@@ -276,98 +362,50 @@ export class MockPrometheusBackend implements PrometheusBackend {
             type: 'alerting', name: 'HighMemoryUsage', health: 'ok', state: 'firing',
             query: '(1 - (node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes)) * 100 > 90',
             duration: 600,
-            labels: { severity: 'critical', team: 'infra', service: 'node-exporter', environment: 'production', region: 'us-east-1', application: 'platform' },
+            labels: { severity: 'critical', team: 'infra', service: 'node-exporter', environment: 'production', region: 'us-east-1', application: 'platform', _workspace: wsProduction.id },
             annotations: { summary: 'Memory usage above 90% on {{ $labels.instance }}', runbook_url: 'https://wiki.example.com/runbooks/high-memory' },
             alerts: [
-              { labels: { alertname: 'HighMemoryUsage', instance: 'i-0def456:9100', severity: 'critical', team: 'infra', service: 'node-exporter', environment: 'production', region: 'us-east-1' }, annotations: { summary: 'Memory usage above 90% on i-0def456:9100' }, state: 'firing', activeAt: tenMinAgo, value: '94.7' },
+              { labels: { alertname: 'HighMemoryUsage', instance: 'i-0def456:9100', severity: 'critical', team: 'infra', service: 'node-exporter', environment: 'production', region: 'us-east-1', _workspace: wsProduction.id }, annotations: { summary: 'Memory usage above 90% on i-0def456:9100' }, state: 'firing', activeAt: tenMinAgo, value: '94.7' },
             ],
             lastEvaluation: fiveMinAgo, evaluationTime: 0.002,
-          },
-          {
-            type: 'alerting', name: 'DiskSpaceLow', health: 'ok', state: 'pending',
-            query: '(node_filesystem_avail_bytes{mountpoint="/"} / node_filesystem_size_bytes{mountpoint="/"}) * 100 < 15',
-            duration: 900,
-            labels: { severity: 'warning', team: 'infra', service: 'node-exporter', environment: 'staging', region: 'us-west-2', application: 'platform' },
-            annotations: { summary: 'Disk space below 15% on {{ $labels.instance }}' },
-            alerts: [
-              { labels: { alertname: 'DiskSpaceLow', instance: 'i-0ghi789:9100', severity: 'warning', team: 'infra', service: 'node-exporter', environment: 'staging', region: 'us-west-2' }, annotations: { summary: 'Disk space below 15% on i-0ghi789:9100' }, state: 'pending', activeAt: now, value: '12.1' },
-            ],
-            lastEvaluation: now, evaluationTime: 0.001,
-          },
-          {
-            type: 'alerting', name: 'NetworkPacketDrops', health: 'ok', state: 'inactive',
-            query: 'rate(node_network_receive_drop_total[5m]) > 100',
-            duration: 300,
-            labels: { severity: 'warning', team: 'network', service: 'node-exporter', environment: 'production', region: 'eu-west-1', application: 'platform' },
-            annotations: { summary: 'Network packet drops detected on {{ $labels.instance }}' },
-            alerts: [],
-            lastEvaluation: oneHourAgo, evaluationTime: 0.001,
           },
         ],
       },
       {
-        name: 'app_alerts', file: '/etc/prometheus/rules/app.yml', interval: 30,
+        name: 'app_alerts', file: `/etc/prometheus/rules/${wsProduction.id}/app.yml`, interval: 30,
         rules: [
           {
             type: 'alerting', name: 'HighErrorRate', health: 'ok', state: 'firing',
             query: 'sum(rate(http_requests_total{status=~"5.."}[5m])) / sum(rate(http_requests_total[5m])) > 0.05',
             duration: 300,
-            labels: { severity: 'critical', team: 'platform', service: 'api-gateway', environment: 'production', region: 'us-east-1', application: 'checkout' },
-            annotations: { summary: 'Error rate above 5%', runbook_url: 'https://wiki.example.com/runbooks/high-error-rate', description: 'HTTP 5xx error rate has exceeded 5% for the last 5 minutes.' },
+            labels: { severity: 'critical', team: 'platform', service: 'api-gateway', environment: 'production', region: 'us-east-1', application: 'checkout', _workspace: wsProduction.id },
+            annotations: { summary: 'Error rate above 5%', runbook_url: 'https://wiki.example.com/runbooks/high-error-rate' },
             alerts: [
-              { labels: { alertname: 'HighErrorRate', severity: 'critical', team: 'platform', service: 'api-gateway', environment: 'production', region: 'us-east-1' }, annotations: { summary: 'Error rate above 5%' }, state: 'firing', activeAt: fiveMinAgo, value: '0.082' },
+              { labels: { alertname: 'HighErrorRate', severity: 'critical', team: 'platform', service: 'api-gateway', environment: 'production', region: 'us-east-1', _workspace: wsProduction.id }, annotations: { summary: 'Error rate above 5%' }, state: 'firing', activeAt: fiveMinAgo, value: '0.082' },
             ],
             lastEvaluation: fiveMinAgo, evaluationTime: 0.005,
-          },
-          {
-            type: 'alerting', name: 'HighLatencyP99', health: 'ok', state: 'inactive',
-            query: 'histogram_quantile(0.99, sum(rate(http_request_duration_seconds_bucket[5m])) by (le)) > 2',
-            duration: 300,
-            labels: { severity: 'warning', team: 'platform', service: 'api-gateway', environment: 'production', region: 'us-east-1', application: 'checkout' },
-            annotations: { summary: 'P99 latency above 2s' },
-            alerts: [],
-            lastEvaluation: oneHourAgo, evaluationTime: 0.004,
           },
           {
             type: 'alerting', name: 'PodCrashLooping', health: 'ok', state: 'firing',
             query: 'rate(kube_pod_container_status_restarts_total[15m]) * 60 * 5 > 0',
             duration: 900,
-            labels: { severity: 'critical', team: 'sre', service: 'kubernetes', environment: 'production', region: 'us-east-1', application: 'order-service' },
-            annotations: { summary: 'Pod {{ $labels.pod }} is crash looping', description: 'Pod has restarted more than 5 times in the last 15 minutes.' },
+            labels: { severity: 'critical', team: 'sre', service: 'kubernetes', environment: 'production', region: 'us-east-1', application: 'order-service', _workspace: wsProduction.id },
+            annotations: { summary: 'Pod {{ $labels.pod }} is crash looping' },
             alerts: [
-              { labels: { alertname: 'PodCrashLooping', severity: 'critical', team: 'sre', pod: 'order-service-7d4f8b-x2k9p', namespace: 'production', service: 'kubernetes', environment: 'production', region: 'us-east-1' }, annotations: { summary: 'Pod order-service-7d4f8b-x2k9p is crash looping' }, state: 'firing', activeAt: tenMinAgo, value: '3' },
+              { labels: { alertname: 'PodCrashLooping', severity: 'critical', team: 'sre', pod: 'order-service-7d4f8b-x2k9p', namespace: 'production', service: 'kubernetes', environment: 'production', region: 'us-east-1', _workspace: wsProduction.id }, annotations: { summary: 'Pod order-service-7d4f8b-x2k9p is crash looping' }, state: 'firing', activeAt: tenMinAgo, value: '3' },
             ],
             lastEvaluation: fiveMinAgo, evaluationTime: 0.002,
-          },
-          {
-            type: 'alerting', name: 'DatabaseConnectionPoolExhausted', health: 'ok', state: 'inactive',
-            query: 'db_connection_pool_available{} < 5',
-            duration: 120,
-            labels: { severity: 'critical', team: 'data', service: 'postgres', environment: 'production', region: 'us-east-1', application: 'user-service' },
-            annotations: { summary: 'Database connection pool nearly exhausted', runbook_url: 'https://wiki.example.com/runbooks/db-pool' },
-            alerts: [],
-            lastEvaluation: oneDayAgo, evaluationTime: 0.001,
-          },
-          {
-            type: 'alerting', name: 'CertificateExpiringSoon', health: 'ok', state: 'pending',
-            query: '(probe_ssl_earliest_cert_expiry - time()) / 86400 < 30',
-            duration: 3600,
-            labels: { severity: 'warning', team: 'security', service: 'blackbox-exporter', environment: 'production', region: 'us-east-1', application: 'platform' },
-            annotations: { summary: 'TLS certificate expiring within 30 days for {{ $labels.instance }}' },
-            alerts: [
-              { labels: { alertname: 'CertificateExpiringSoon', severity: 'warning', team: 'security', instance: 'api.example.com:443', service: 'blackbox-exporter', environment: 'production', region: 'us-east-1' }, annotations: { summary: 'TLS certificate expiring within 30 days for api.example.com:443' }, state: 'pending', activeAt: oneDayAgo, value: '22' },
-            ],
-            lastEvaluation: oneHourAgo, evaluationTime: 0.001,
           },
         ],
       },
     ];
 
-    this.ruleGroups.set(dsId, groups);
+    allGroups.push(...handcraftedGroups);
+    this.ruleGroups.set(dsId, allGroups);
 
-    // Active alerts = all firing/pending alerts from rules
+    // Active alerts = all firing/pending alerts from all rules
     const active: PromAlert[] = [];
-    for (const g of groups) {
+    for (const g of allGroups) {
       for (const r of g.rules) {
         if (r.type === 'alerting') {
           for (const a of r.alerts) {

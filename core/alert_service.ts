@@ -5,6 +5,8 @@
 import {
   Datasource,
   DatasourceService,
+  DatasourceFetchResult,
+  DatasourceFetchStatus,
   Logger,
   OpenSearchBackend,
   PrometheusBackend,
@@ -12,9 +14,12 @@ import {
   OSMonitor,
   PromAlert,
   PromRuleGroup,
+  ProgressiveResponse,
+  PaginatedResponse,
   UnifiedAlert,
   UnifiedAlertSeverity,
   UnifiedAlertState,
+  UnifiedFetchOptions,
   UnifiedRule,
   MonitorType,
   MonitorStatus,
@@ -23,6 +28,8 @@ import {
   NotificationRouting,
   SuppressionRule,
 } from './types';
+
+const DEFAULT_TIMEOUT_MS = 10_000;
 
 export class MultiBackendAlertService {
   private osBackend?: OpenSearchBackend;
@@ -97,68 +104,283 @@ export class MultiBackendAlertService {
   }
 
   // =========================================================================
-  // Unified views (for the UI)
+  // Unified views (for the UI) — parallel with per-datasource timeout
   // =========================================================================
 
-  async getUnifiedAlerts(): Promise<UnifiedAlert[]> {
-    const datasources = await this.datasourceService.list();
-    const enabled = datasources.filter(ds => ds.enabled);
-    const results: UnifiedAlert[] = [];
+  async getUnifiedAlerts(options?: UnifiedFetchOptions): Promise<ProgressiveResponse<UnifiedAlert>> {
+    const datasources = await this.resolveDatasources(options?.dsIds);
+    const timeoutMs = options?.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+    const fetchedAt = new Date().toISOString();
 
-    for (const ds of enabled) {
-      try {
-        if (ds.type === 'opensearch' && this.osBackend) {
-          const { alerts } = await this.osBackend.getAlerts(ds);
-          for (const a of alerts) {
-            results.push(osAlertToUnified(a, ds.id));
-          }
-        } else if (ds.type === 'prometheus' && this.promBackend) {
-          const alerts = await this.promBackend.getAlerts(ds);
-          for (const a of alerts) {
-            results.push(promAlertToUnified(a, ds.id));
-          }
-        }
-      } catch (err) {
-        this.logger.error(`Failed to get alerts from ${ds.name}: ${err}`);
+    const dsResults = await Promise.allSettled(
+      datasources.map(ds => this.fetchAlertsFromDatasource(ds, timeoutMs, options?.onProgress))
+    );
+
+    const allResults: UnifiedAlert[] = [];
+    const statusList: DatasourceFetchResult<UnifiedAlert>[] = [];
+
+    for (let i = 0; i < datasources.length; i++) {
+      const settled = dsResults[i];
+      if (settled.status === 'fulfilled') {
+        allResults.push(...settled.value.data);
+        statusList.push(settled.value);
+      } else {
+        const errResult: DatasourceFetchResult<UnifiedAlert> = {
+          datasourceId: datasources[i].id,
+          datasourceName: datasources[i].name,
+          datasourceType: datasources[i].type,
+          status: 'error',
+          data: [],
+          error: String(settled.reason),
+          durationMs: timeoutMs,
+        };
+        statusList.push(errResult);
       }
     }
 
+    return {
+      results: allResults,
+      datasourceStatus: statusList,
+      totalDatasources: datasources.length,
+      completedDatasources: statusList.filter(s => s.status === 'success').length,
+      fetchedAt,
+    };
+  }
+
+  async getUnifiedRules(options?: UnifiedFetchOptions): Promise<ProgressiveResponse<UnifiedRule>> {
+    const datasources = await this.resolveDatasources(options?.dsIds);
+    const timeoutMs = options?.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+    const fetchedAt = new Date().toISOString();
+
+    const dsResults = await Promise.allSettled(
+      datasources.map(ds => this.fetchRulesFromDatasource(ds, timeoutMs, options?.onProgress))
+    );
+
+    const allResults: UnifiedRule[] = [];
+    const statusList: DatasourceFetchResult<UnifiedRule>[] = [];
+
+    for (let i = 0; i < datasources.length; i++) {
+      const settled = dsResults[i];
+      if (settled.status === 'fulfilled') {
+        allResults.push(...settled.value.data);
+        statusList.push(settled.value);
+      } else {
+        const errResult: DatasourceFetchResult<UnifiedRule> = {
+          datasourceId: datasources[i].id,
+          datasourceName: datasources[i].name,
+          datasourceType: datasources[i].type,
+          status: 'error',
+          data: [],
+          error: String(settled.reason),
+          durationMs: timeoutMs,
+        };
+        statusList.push(errResult);
+      }
+    }
+
+    return {
+      results: allResults,
+      datasourceStatus: statusList,
+      totalDatasources: datasources.length,
+      completedDatasources: statusList.filter(s => s.status === 'success').length,
+      fetchedAt,
+    };
+  }
+
+  // =========================================================================
+  // Paginated unified views — for single-datasource selection with pagination
+  // =========================================================================
+
+  async getPaginatedRules(options?: UnifiedFetchOptions): Promise<PaginatedResponse<UnifiedRule>> {
+    const page = options?.page ?? 1;
+    const pageSize = options?.pageSize ?? 20;
+    const datasources = await this.resolveDatasources(options?.dsIds);
+
+    // Fetch all rules from selected datasources (typically just 1-2)
+    const allRules: UnifiedRule[] = [];
+    for (const ds of datasources) {
+      const rules = await this.fetchRulesRaw(ds);
+      allRules.push(...rules);
+    }
+
+    const total = allRules.length;
+    const start = (page - 1) * pageSize;
+    const results = allRules.slice(start, start + pageSize);
+
+    return {
+      results,
+      total,
+      page,
+      pageSize,
+      hasMore: start + pageSize < total,
+    };
+  }
+
+  async getPaginatedAlerts(options?: UnifiedFetchOptions): Promise<PaginatedResponse<UnifiedAlert>> {
+    const page = options?.page ?? 1;
+    const pageSize = options?.pageSize ?? 20;
+    const datasources = await this.resolveDatasources(options?.dsIds);
+
+    const allAlerts: UnifiedAlert[] = [];
+    for (const ds of datasources) {
+      const alerts = await this.fetchAlertsRaw(ds);
+      allAlerts.push(...alerts);
+    }
+
+    const total = allAlerts.length;
+    const start = (page - 1) * pageSize;
+    const results = allAlerts.slice(start, start + pageSize);
+
+    return {
+      results,
+      total,
+      page,
+      pageSize,
+      hasMore: start + pageSize < total,
+    };
+  }
+
+  // =========================================================================
+
+  private async fetchAlertsFromDatasource(
+    ds: Datasource,
+    timeoutMs: number,
+    onProgress?: (result: DatasourceFetchResult<UnifiedAlert>) => void,
+  ): Promise<DatasourceFetchResult<UnifiedAlert>> {
+    const start = Date.now();
+    const makeResult = (status: DatasourceFetchStatus, data: UnifiedAlert[], error?: string): DatasourceFetchResult<UnifiedAlert> => ({
+      datasourceId: ds.id,
+      datasourceName: ds.name,
+      datasourceType: ds.type,
+      status,
+      data,
+      error,
+      durationMs: Date.now() - start,
+    });
+
+    try {
+      const data = await this.withTimeout(
+        this.fetchAlertsRaw(ds),
+        timeoutMs,
+        `Datasource ${ds.name} timed out after ${timeoutMs}ms`,
+      );
+      const result = makeResult('success', data);
+      if (onProgress) onProgress(result);
+      return result;
+    } catch (err) {
+      const isTimeout = String(err).includes('timed out');
+      const result = makeResult(isTimeout ? 'timeout' : 'error', [], String(err));
+      this.logger.error(`Failed to fetch alerts from ${ds.name}: ${err}`);
+      if (onProgress) onProgress(result);
+      return result;
+    }
+  }
+
+  private async fetchRulesFromDatasource(
+    ds: Datasource,
+    timeoutMs: number,
+    onProgress?: (result: DatasourceFetchResult<UnifiedRule>) => void,
+  ): Promise<DatasourceFetchResult<UnifiedRule>> {
+    const start = Date.now();
+    const makeResult = (status: DatasourceFetchStatus, data: UnifiedRule[], error?: string): DatasourceFetchResult<UnifiedRule> => ({
+      datasourceId: ds.id,
+      datasourceName: ds.name,
+      datasourceType: ds.type,
+      status,
+      data,
+      error,
+      durationMs: Date.now() - start,
+    });
+
+    try {
+      const data = await this.withTimeout(
+        this.fetchRulesRaw(ds),
+        timeoutMs,
+        `Datasource ${ds.name} timed out after ${timeoutMs}ms`,
+      );
+      const result = makeResult('success', data);
+      if (onProgress) onProgress(result);
+      return result;
+    } catch (err) {
+      const isTimeout = String(err).includes('timed out');
+      const result = makeResult(isTimeout ? 'timeout' : 'error', [], String(err));
+      this.logger.error(`Failed to fetch rules from ${ds.name}: ${err}`);
+      if (onProgress) onProgress(result);
+      return result;
+    }
+  }
+
+  private async fetchAlertsRaw(ds: Datasource): Promise<UnifiedAlert[]> {
+    const results: UnifiedAlert[] = [];
+    if (ds.type === 'opensearch' && this.osBackend) {
+      const { alerts } = await this.osBackend.getAlerts(ds);
+      for (const a of alerts) results.push(osAlertToUnified(a, ds.id));
+    } else if (ds.type === 'prometheus' && this.promBackend) {
+      const alerts = await this.promBackend.getAlerts(ds);
+      for (const a of alerts) results.push(promAlertToUnified(a, ds.id));
+    }
     return results;
   }
 
-  async getUnifiedRules(): Promise<UnifiedRule[]> {
-    const datasources = await this.datasourceService.list();
-    const enabled = datasources.filter(ds => ds.enabled);
+  private async fetchRulesRaw(ds: Datasource): Promise<UnifiedRule[]> {
     const results: UnifiedRule[] = [];
-
-    for (const ds of enabled) {
-      try {
-        if (ds.type === 'opensearch' && this.osBackend) {
-          const monitors = await this.osBackend.getMonitors(ds);
-          for (const m of monitors) {
-            results.push(osMonitorToUnifiedRule(m, ds.id));
-          }
-        } else if (ds.type === 'prometheus' && this.promBackend) {
-          const groups = await this.promBackend.getRuleGroups(ds);
-          for (const g of groups) {
-            for (const r of g.rules) {
-              if (r.type === 'alerting') {
-                results.push(promRuleToUnified(r, g.name, ds.id));
-              }
-            }
-          }
+    if (ds.type === 'opensearch' && this.osBackend) {
+      const monitors = await this.osBackend.getMonitors(ds);
+      for (const m of monitors) results.push(osMonitorToUnifiedRule(m, ds.id));
+    } else if (ds.type === 'prometheus' && this.promBackend) {
+      const groups = await this.promBackend.getRuleGroups(ds);
+      for (const g of groups) {
+        for (const r of g.rules) {
+          if (r.type === 'alerting') results.push(promRuleToUnified(r, g.name, ds.id));
         }
-      } catch (err) {
-        this.logger.error(`Failed to get rules from ${ds.name}: ${err}`);
       }
     }
-
     return results;
   }
 
   // =========================================================================
   // Helpers
   // =========================================================================
+
+  private async resolveDatasources(dsIds?: string[]): Promise<Datasource[]> {
+    const all = await this.datasourceService.list();
+    const enabled = all.filter(ds => ds.enabled);
+    if (!dsIds || dsIds.length === 0) return enabled;
+
+    const resolved: Datasource[] = [];
+    for (const id of dsIds) {
+      // Check if this is a workspace-scoped ID (e.g., "ds-2::ws-prod-001")
+      if (id.indexOf('::') !== -1) {
+        const parts = id.split('::');
+        const parentId = parts[0];
+        const wsId = parts[1];
+        const parent = enabled.filter(ds => ds.id === parentId)[0];
+        if (parent) {
+          // Create a workspace-scoped datasource view
+          resolved.push({
+            ...parent,
+            id: id,
+            workspaceId: wsId,
+            parentDatasourceId: parentId,
+          });
+        }
+      } else {
+        const match = enabled.filter(ds => ds.id === id);
+        if (match.length > 0) resolved.push(match[0]);
+      }
+    }
+    return resolved;
+  }
+
+  private withTimeout<T>(promise: Promise<T>, ms: number, message: string): Promise<T> {
+    return new Promise<T>((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error(message)), ms);
+      promise.then(
+        (val) => { clearTimeout(timer); resolve(val); },
+        (err) => { clearTimeout(timer); reject(err); },
+      );
+    });
+  }
 
   private async requireDatasource(dsId: string, expectedType: string): Promise<Datasource> {
     const ds = await this.datasourceService.get(dsId);
